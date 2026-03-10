@@ -11,6 +11,13 @@ interface DashboardPageProps {
 
 export function DashboardPage({ onSelectAsset }: DashboardPageProps) {
   const { data } = useDashboardData();
+  const assets = data?.assets ?? [];
+  const totalPortfolioValue = data?.totalPortfolioValue ?? 0;
+  const portfolioChange24h = data?.portfolioChange24h ?? 0;
+  const portfolioChange24hValue = data?.portfolioChange24hValue ?? 0;
+  const portfolioHistory = data?.portfolioHistory ?? [];
+  const marketMovers = data?.marketMovers ?? [];
+  const recentActivity = data?.recentActivity ?? [];
   const fmt = (v: number) => v.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
   return (
@@ -19,20 +26,20 @@ export function DashboardPage({ onSelectAsset }: DashboardPageProps) {
       <div className="grid grid-cols-4 gap-4">
         <MetricCard
           title="Portfolio Value"
-          value={fmt(data.totalPortfolioValue)}
-          change={data.portfolioChange24h}
+          value={fmt(totalPortfolioValue)}
+          change={portfolioChange24h}
         />
         <MetricCard
           title="24h Change"
-          value={`${data.portfolioChange24hValue >= 0 ? "+" : ""}${fmt(data.portfolioChange24hValue)}`}
-          subtitle={`${data.portfolioChange24h >= 0 ? "+" : ""}${data.portfolioChange24h}%`}
+          value={`${portfolioChange24hValue >= 0 ? "+" : ""}${fmt(portfolioChange24hValue)}`}
+          subtitle={`${portfolioChange24h >= 0 ? "+" : ""}${portfolioChange24h}%`}
         />
-        <MetricCard title="Assets" value={data.assets.length.toString()} subtitle="Active holdings" />
+        <MetricCard title="Assets" value={assets.length.toString()} subtitle="Active holdings" />
         <MetricCard
           title="Best Performer"
-          value={data.marketMovers[0]?.symbol ?? "--"}
-          change={data.marketMovers[0]?.change ?? 0}
-          subtitle={data.marketMovers[0]?.name ?? "No data"}
+          value={marketMovers[0]?.symbol ?? "--"}
+          change={marketMovers[0]?.change ?? 0}
+          subtitle={marketMovers[0]?.name ?? "No data"}
         />
       </div>
 
@@ -41,7 +48,7 @@ export function DashboardPage({ onSelectAsset }: DashboardPageProps) {
         <div className="col-span-2 bg-card border border-border rounded-lg p-5">
           <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-4">Portfolio Performance</div>
           <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={data.portfolioHistory}>
+            <AreaChart data={portfolioHistory}>
               <defs>
                 <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="hsl(168, 100%, 48%)" stopOpacity={0.2} />
@@ -66,7 +73,7 @@ export function DashboardPage({ onSelectAsset }: DashboardPageProps) {
           <div className="bg-card border border-border rounded-lg p-5">
             <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-3">Market Movers</div>
             <div className="space-y-3">
-              {data.marketMovers.map((m) => (
+              {marketMovers.map((m) => (
                 <div key={m.symbol} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="h-6 w-6 rounded bg-secondary flex items-center justify-center">
@@ -86,7 +93,7 @@ export function DashboardPage({ onSelectAsset }: DashboardPageProps) {
           <div className="bg-card border border-border rounded-lg p-5">
             <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-3">Recent Activity</div>
             <div className="space-y-3">
-              {data.recentActivity.map((a) => (
+              {recentActivity.map((a) => (
                 <div key={a.id} className="flex items-center justify-between">
                   <div>
                     <div className="text-xs font-mono text-foreground">{a.amount}</div>
@@ -119,7 +126,7 @@ export function DashboardPage({ onSelectAsset }: DashboardPageProps) {
             </tr>
           </thead>
           <tbody>
-            {data.assets.map((a) => (
+            {assets.map((a) => (
               <AssetRow key={a.id} asset={a} onClick={() => onSelectAsset(a)} />
             ))}
           </tbody>

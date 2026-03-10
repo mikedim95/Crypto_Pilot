@@ -1,4 +1,10 @@
-import type { ConnectionStatus, DashboardResponse, OrdersResponse } from "@/types/api";
+import type {
+  ConnectionStatus,
+  DashboardResponse,
+  MiningOverviewResponse,
+  NicehashOverviewResponse,
+  OrdersResponse,
+} from "@/types/api";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
 
@@ -47,6 +53,8 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 export const backendApi = {
   getDashboard: () => apiRequest<DashboardResponse>("/api/dashboard"),
   getOrders: () => apiRequest<OrdersResponse>("/api/orders"),
+  getMiningOverview: () => apiRequest<MiningOverviewResponse>("/api/mining/overview"),
+  getNicehashOverview: () => apiRequest<NicehashOverviewResponse>("/api/mining/nicehash"),
   getBinanceConnection: () => apiRequest<ConnectionStatus>("/api/binance/connection"),
   connectBinance: (body: ConnectRequest) =>
     apiRequest<ConnectionStatus>("/api/binance/connection", {

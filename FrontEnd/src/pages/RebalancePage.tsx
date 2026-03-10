@@ -9,8 +9,9 @@ const COLORS = [
 
 export function RebalancePage() {
   const { data } = useDashboardData();
-  const currentData = data.assets.map((a) => ({ name: a.symbol, value: a.allocation }));
-  const targetData = data.assets.map((a) => ({ name: a.symbol, value: a.targetAllocation }));
+  const assets = data?.assets ?? [];
+  const currentData = assets.map((a) => ({ name: a.symbol, value: a.allocation }));
+  const targetData = assets.map((a) => ({ name: a.symbol, value: a.targetAllocation }));
 
   return (
     <div className="p-6 space-y-6">
@@ -52,7 +53,7 @@ export function RebalancePage() {
             </tr>
           </thead>
           <tbody>
-            {data.assets.map((a) => {
+            {assets.map((a) => {
               const diff = a.targetAllocation - a.allocation;
               return (
                 <tr key={a.id} className="border-b border-border">

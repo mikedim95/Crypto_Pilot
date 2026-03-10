@@ -3,6 +3,7 @@ import { useOrdersData } from "@/hooks/useTradingData";
 
 export function OrdersPage() {
   const { data } = useOrdersData();
+  const orders = data?.orders ?? [];
   const fmt = (v: number) => v.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
 
   return (
@@ -22,7 +23,7 @@ export function OrdersPage() {
             </tr>
           </thead>
           <tbody>
-            {data.orders.map((o) => (
+            {orders.map((o) => (
               <tr key={o.id} className="border-b border-border hover:bg-surface-hover transition-colors">
                 <td className="py-3 px-4 text-sm font-mono text-muted-foreground">{o.time}</td>
                 <td className="py-3 px-4 text-right text-sm font-mono text-foreground">{o.pair}</td>

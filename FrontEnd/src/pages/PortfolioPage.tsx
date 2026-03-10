@@ -1,89 +1,130 @@
+import { Lock } from "lucide-react";
 import { AssetRow } from "@/components/AssetRow";
-import { Asset } from "@/data/mockData";
+import { SpinnerValue } from "@/components/SpinnerValue";
 import { useDashboardData } from "@/hooks/useTradingData";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import type { Asset } from "@/types/api";
 
 interface PortfolioPageProps {
-  onSelectAsset: (asset: Asset) => void;
+  onSelectAsset?: (asset: Asset) => void;
 }
 
-const COLORS = [
-  "hsl(168, 100%, 48%)", "hsl(230, 60%, 60%)", "hsl(340, 100%, 62%)",
-  "hsl(45, 100%, 60%)", "hsl(280, 60%, 60%)", "hsl(200, 80%, 50%)"
-];
-
 export function PortfolioPage({ onSelectAsset }: PortfolioPageProps) {
-  const { data } = useDashboardData();
-  const fmt = (v: number) => v.toLocaleString("en-US", { style: "currency", currency: "USD" });
-  const pieData = data.assets.map((a) => ({ name: a.symbol, value: a.allocation }));
-  const largest = [...data.assets].sort((a, b) => b.allocation - a.allocation)[0];
+  const { data, isPending, error } = useDashboardData();
+  const isLoading = isPending && !data;
+
+  const assets = data?.assets ?? [];
+
+  const fmtUsd = (value: number) => value.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+  const topPosition = [...assets].sort((a, b) => b.value - a.value)[0];
 
   return (
     <div className="p-6 space-y-4">
-      <div className="grid grid-cols-3 gap-4">
-        {/* Allocation chart */}
-        <div className="bg-card border border-border rounded-lg p-5">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-4">Asset Allocation</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={90} dataKey="value" stroke="none">
-                {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-              </Pie>
-              <Tooltip
-                contentStyle={{ background: "hsl(230, 28%, 8%)", border: "1px solid hsl(231, 18%, 16%)", borderRadius: "6px", fontFamily: "IBM Plex Mono", fontSize: "12px" }}
-                itemStyle={{ color: "hsl(233, 38%, 92%)" }}
-                formatter={(v: number) => [`${v}%`, "Allocation"]}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="flex flex-wrap gap-3 mt-2">
-            {data.assets.map((a, i) => (
-              <div key={a.id} className="flex items-center gap-1.5">
-                <div className="h-2 w-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                <span className="text-[10px] font-mono text-muted-foreground">{a.symbol} {a.allocation}%</span>
-              </div>
-            ))}
-          </div>
+      <div>
+        <h2 className="text-lg font-mono font-semibold text-foreground">Portfolio</h2>
+        <p className="text-sm text-muted-foreground mt-1">Core holdings overview.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Total Value</div>
+          <SpinnerValue
+            loading={isLoading}
+            value={data ? fmtUsd(data.totalPortfolioValue) : undefined}
+            className="mt-2 text-xl font-mono font-semibold text-foreground"
+          />
         </div>
 
-        {/* Summary cards */}
-        <div className="col-span-2 space-y-4">
-          <div className="grid grid-cols-3 gap-4">
-            <div className="bg-card border border-border rounded-lg p-5">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">Total Value</div>
-              <div className="text-lg font-mono font-semibold text-foreground">{fmt(data.totalPortfolioValue)}</div>
-            </div>
-            <div className="bg-card border border-border rounded-lg p-5">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">Assets</div>
-              <div className="text-lg font-mono font-semibold text-foreground">{data.assets.length}</div>
-            </div>
-            <div className="bg-card border border-border rounded-lg p-5">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">Largest Position</div>
-              <div className="text-lg font-mono font-semibold text-foreground">
-                {largest ? `${largest.symbol} ${largest.allocation.toFixed(1)}%` : "--"}
-              </div>
-            </div>
-          </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">24h Change</div>
+          <SpinnerValue
+            loading={isLoading}
+            value={
+              data
+                ? `${data.portfolioChange24hValue >= 0 ? "+" : ""}${fmtUsd(data.portfolioChange24hValue)}`
+                : undefined
+            }
+            className={`mt-2 text-xl font-mono font-semibold ${data && data.portfolioChange24hValue < 0 ? "text-negative" : "text-positive"}`}
+          />
+          <SpinnerValue
+            loading={isLoading}
+            value={data ? `${data.portfolioChange24h >= 0 ? "+" : ""}${data.portfolioChange24h}%` : undefined}
+            className={`text-[11px] font-mono ${data && data.portfolioChange24h < 0 ? "text-negative" : "text-positive"}`}
+          />
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Assets</div>
+          <SpinnerValue
+            loading={isLoading}
+            value={data ? data.assets.length : undefined}
+            className="mt-2 text-xl font-mono font-semibold text-foreground"
+          />
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Top Position</div>
+          <SpinnerValue
+            loading={isLoading}
+            value={topPosition ? `${topPosition.symbol} ${fmtUsd(topPosition.value)}` : undefined}
+            className="mt-2 text-xl font-mono font-semibold text-foreground"
+          />
         </div>
       </div>
 
-      {/* Holdings table */}
-      <div className="bg-card border border-border rounded-lg">
+      <div className="rounded-lg border border-border bg-card">
         <div className="px-5 py-4 border-b border-border">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">All Holdings</div>
+          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Holdings</div>
         </div>
         <table className="w-full">
           <thead>
             <tr className="border-b border-border">
-              {["Asset", "Price", "Balance", "Value", "Allocation", "24h", "Trend"].map((h) => (
-                <th key={h} className="py-3 px-4 text-[10px] font-mono uppercase tracking-wider text-muted-foreground text-right first:text-left">{h}</th>
+              {["Asset", "Price", "Balance", "Value", "Allocation", "24h", "Trend"].map((heading) => (
+                <th
+                  key={heading}
+                  className="py-3 px-4 text-[10px] font-mono uppercase tracking-wider text-muted-foreground text-right first:text-left"
+                >
+                  {heading}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {data.assets.map((a) => <AssetRow key={a.id} asset={a} onClick={() => onSelectAsset(a)} />)}
+            {isLoading
+              ? Array.from({ length: 3 }).map((_, rowIndex) => (
+                  <tr key={`loading-row-${rowIndex}`} className="border-b border-border">
+                    {Array.from({ length: 7 }).map((__, colIndex) => (
+                      <td key={`loading-cell-${rowIndex}-${colIndex}`} className="py-3 px-4 text-right first:text-left">
+                        <div className="inline-flex">
+                          <SpinnerValue loading value={undefined} />
+                        </div>
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              : assets.map((asset) => (
+                  <AssetRow key={asset.id} asset={asset} onClick={onSelectAsset ? () => onSelectAsset(asset) : undefined} />
+                ))}
           </tbody>
         </table>
+
+        {!isLoading && assets.length === 0 ? (
+          <div className="px-5 py-6 text-sm text-muted-foreground">No live holdings found for the connected account.</div>
+        ) : null}
+      </div>
+
+      {error && !data ? (
+        <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">
+          {error instanceof Error ? error.message : "Failed to load portfolio data."}
+        </div>
+      ) : null}
+
+      <div className="rounded-lg border border-border bg-secondary/40 p-4 text-[11px] text-muted-foreground">
+        <div className="inline-flex items-center gap-1 font-mono uppercase tracking-wider">
+          <Lock className="h-3 w-3" />
+          Coming Soon
+        </div>
+        <div className="mt-1">Advanced portfolio analytics and optimization tools are inactive for now.</div>
       </div>
     </div>
   );

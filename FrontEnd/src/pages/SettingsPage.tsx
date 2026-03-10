@@ -13,6 +13,9 @@ function getErrorMessage(error: unknown): string {
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const { data: connection } = useBinanceConnection();
+  const isConnected = connection?.connected ?? false;
+  const source = connection?.source ?? "none";
+  const isTestnet = connection?.testnet ?? false;
 
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
@@ -72,16 +75,16 @@ export function SettingsPage() {
         <div className="bg-card border border-border rounded-lg p-5 space-y-4">
           <div className="flex items-center justify-between">
             <span className="text-sm font-mono font-semibold text-foreground">Binance</span>
-            <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${connection.connected ? "bg-positive/10 text-positive" : "bg-secondary text-muted-foreground"}`}>
-              {connection.connected ? "Connected" : "Disconnected"}
+            <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${isConnected ? "bg-positive/10 text-positive" : "bg-secondary text-muted-foreground"}`}>
+              {isConnected ? "Connected" : "Disconnected"}
             </span>
           </div>
 
           <div className="text-[11px] text-muted-foreground">
-            Source: {connection.source.toUpperCase()} {connection.testnet ? "(Testnet)" : "(Mainnet)"}
+            Source: {source.toUpperCase()} {isTestnet ? "(Testnet)" : "(Mainnet)"}
           </div>
 
-          {connection.message ? (
+          {connection?.message ? (
             <div className="text-[11px] text-muted-foreground">{connection.message}</div>
           ) : null}
 

@@ -1,32 +1,61 @@
 import { useState } from "react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { TopBar } from "@/components/TopBar";
-import { ContextPanel } from "@/components/ContextPanel";
-import { DashboardPage } from "@/pages/DashboardPage";
+import { ComingSoonPage } from "@/components/ComingSoonPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
-import { MarketsPage } from "@/pages/MarketsPage";
-import { RebalancePage } from "@/pages/RebalancePage";
-import { AutomationPage } from "@/pages/AutomationPage";
+import { TradingPage } from "@/pages/TradingPage";
 import { AsicMinersPage } from "@/pages/AsicMinersPage";
-import { OrdersPage } from "@/pages/OrdersPage";
-import { SettingsPage } from "@/pages/SettingsPage";
-import { Asset } from "@/data/mockData";
+import { NicehashPage } from "@/pages/NicehashPage";
+
+const inactivePageMeta: Record<string, { title: string; description: string }> = {
+  dashboard: {
+    title: "Dashboard",
+    description: "Dashboard widgets and broad analytics are inactive in this initial release.",
+  },
+  markets: {
+    title: "Markets",
+    description: "Expanded market scanner and discovery tools are coming soon.",
+  },
+  rebalance: {
+    title: "Rebalance",
+    description: "Automated rebalancing workflows are not active yet.",
+  },
+  automation: {
+    title: "Automation",
+    description: "Strategy automation and bot execution are coming soon.",
+  },
+  orders: {
+    title: "Orders",
+    description: "Detailed order history and management are coming soon.",
+  },
+  settings: {
+    title: "Settings",
+    description: "Extended settings and account controls are coming soon.",
+  },
+};
 
 const Index = () => {
-  const [currentPage, setCurrentPage] = useState("dashboard");
-  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+  const [currentPage, setCurrentPage] = useState("portfolio");
 
   const renderPage = () => {
     switch (currentPage) {
-      case "dashboard": return <DashboardPage onSelectAsset={setSelectedAsset} />;
-      case "portfolio": return <PortfolioPage onSelectAsset={setSelectedAsset} />;
-      case "markets": return <MarketsPage onSelectAsset={setSelectedAsset} />;
-      case "rebalance": return <RebalancePage />;
-      case "automation": return <AutomationPage />;
-      case "asic-miners": return <AsicMinersPage />;
-      case "orders": return <OrdersPage />;
-      case "settings": return <SettingsPage />;
-      default: return <DashboardPage onSelectAsset={setSelectedAsset} />;
+      case "portfolio":
+        return <PortfolioPage />;
+      case "trading":
+        return <TradingPage />;
+      case "asic-miners":
+        return <AsicMinersPage />;
+      case "nicehash":
+        return <NicehashPage />;
+      default: {
+        const inactive = inactivePageMeta[currentPage];
+        return (
+          <ComingSoonPage
+            title={inactive?.title ?? "Module"}
+            description={inactive?.description ?? "This module is currently inactive."}
+          />
+        );
+      }
     }
   };
 
@@ -35,11 +64,8 @@ const Index = () => {
       <AppSidebar currentPage={currentPage} onNavigate={setCurrentPage} />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar />
-        <main className="flex-1 overflow-y-auto">
-          {renderPage()}
-        </main>
+        <main className="flex-1 overflow-y-auto">{renderPage()}</main>
       </div>
-      <ContextPanel asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
     </div>
   );
 };

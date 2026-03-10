@@ -7,6 +7,7 @@ import {
   setSessionCredentials,
   validateCredentials,
 } from "./binanceClient.js";
+import { getMiningOverviewData, getNicehashOverviewData } from "./miningService.js";
 import { getDashboardData, getOrdersData } from "./portfolioService.js";
 
 const app = express();
@@ -23,6 +24,18 @@ app.use(
   })
 );
 app.use(express.json({ limit: "10kb" }));
+app.use((req, res, next) => {
+  const startedAt = process.hrtime.bigint();
+
+  res.on("finish", () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs.toFixed(1)}ms`
+    );
+  });
+
+  next();
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -80,6 +93,16 @@ app.get("/api/dashboard", async (_req, res) => {
 app.get("/api/orders", async (_req, res) => {
   const orders = await getOrdersData();
   res.json(orders);
+});
+
+app.get("/api/mining/overview", (_req, res) => {
+  const overview = getMiningOverviewData();
+  res.json(overview);
+});
+
+app.get("/api/mining/nicehash", (_req, res) => {
+  const overview = getNicehashOverviewData();
+  res.json(overview);
 });
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

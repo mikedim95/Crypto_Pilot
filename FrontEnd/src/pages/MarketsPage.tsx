@@ -11,8 +11,9 @@ interface MarketsPageProps {
 
 export function MarketsPage({ onSelectAsset }: MarketsPageProps) {
   const { data } = useDashboardData();
+  const assets = data?.assets ?? [];
   const [search, setSearch] = useState("");
-  const filtered = data.assets.filter(
+  const filtered = assets.filter(
     (a) =>
       a.name.toLowerCase().includes(search.toLowerCase()) ||
       a.symbol.toLowerCase().includes(search.toLowerCase())

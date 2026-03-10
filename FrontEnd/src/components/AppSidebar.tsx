@@ -1,9 +1,18 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, Briefcase, BarChart3, RefreshCw, Cpu,
-  Bot, LineChart, ClipboardList, History, Settings,
-  ChevronLeft, ChevronRight, Lock, HardDrive
+  LayoutDashboard,
+  Briefcase,
+  BarChart3,
+  RefreshCw,
+  Bot,
+  ClipboardList,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  Lock,
+  HardDrive,
+  Cpu,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -12,20 +21,19 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "portfolio", label: "Portfolio", icon: Briefcase },
-  { id: "markets", label: "Markets", icon: BarChart3 },
-  { id: "rebalance", label: "Rebalance", icon: RefreshCw },
-  { id: "automation", label: "Automation", icon: Bot },
+  { id: "trading", label: "Trading", icon: ClipboardList },
   { id: "asic-miners", label: "ASIC Miners", icon: HardDrive },
-  { id: "orders", label: "Orders", icon: ClipboardList },
-  { id: "settings", label: "Settings", icon: Settings },
+  { id: "nicehash", label: "NiceHash", icon: Cpu },
 ];
 
 const comingSoon = [
-  { id: "strategies", label: "Strategies", icon: Cpu },
-  { id: "analytics", label: "Analytics", icon: LineChart },
-  { id: "history", label: "History", icon: History },
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "markets", label: "Markets", icon: BarChart3 },
+  { id: "rebalance", label: "Rebalance", icon: RefreshCw },
+  { id: "automation", label: "Automation", icon: Bot },
+  { id: "orders", label: "Orders", icon: ClipboardList },
+  { id: "settings", label: "Settings", icon: Settings },
 ];
 
 export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
@@ -38,22 +46,18 @@ export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
         collapsed ? "w-16" : "w-60"
       )}
     >
-      {/* Logo */}
       <div className="h-16 flex items-center px-4 border-b border-border">
         {!collapsed && (
           <span className="font-mono text-sm font-semibold tracking-widest text-foreground">
             NEXUS<span className="text-primary">.</span>
           </span>
         )}
-        {collapsed && (
-          <span className="font-mono text-sm font-bold text-primary mx-auto">N</span>
-        )}
+        {collapsed && <span className="font-mono text-sm font-bold text-primary mx-auto">N</span>}
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">
         <div className={cn("text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2", collapsed ? "text-center" : "px-3")}>
-          {collapsed ? "—" : "Main"}
+          {collapsed ? "--" : "Main"}
         </div>
         {navItems.map((item) => {
           const active = currentPage === item.id;
@@ -76,7 +80,7 @@ export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
         })}
 
         <div className={cn("text-[10px] font-mono uppercase tracking-wider text-muted-foreground mt-6 mb-2", collapsed ? "text-center" : "px-3")}>
-          {collapsed ? "—" : "Coming Soon"}
+          {collapsed ? "--" : "Coming Soon"}
         </div>
         {comingSoon.map((item) => (
           <div
@@ -97,7 +101,6 @@ export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
         ))}
       </nav>
 
-      {/* Collapse toggle */}
       <button
         onClick={() => setCollapsed(!collapsed)}
         className="h-10 flex items-center justify-center border-t border-border text-muted-foreground hover:text-foreground transition-colors"

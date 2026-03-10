@@ -73,3 +73,45 @@ export interface BinanceCredentials {
   apiSecret: string;
   testnet: boolean;
 }
+
+export interface MinerBasicInfo {
+  id: string;
+  name: string;
+  model: string;
+  status: string;
+  hashrateTH: number | null;
+  powerW: number | null;
+  pool: string | null;
+  lastSeen: string | null;
+  estimatedDailyRevenueUSD: number | null;
+}
+
+export interface MiningOverviewResponse {
+  source: "none" | "env";
+  connected: boolean;
+  message?: string;
+  totalMiners: number | null;
+  activeMiners: number | null;
+  totalHashrateTH: number | null;
+  totalPowerW: number | null;
+  averageChipTempC: number | null;
+  estimatedDailyRevenueUSD: number | null;
+  miners: MinerBasicInfo[];
+  generatedAt: string;
+}
+
+export interface NicehashOverviewResponse {
+  source: "none" | "env";
+  connected: boolean;
+  message?: string;
+  poolStatus: string | null;
+  poolName: string | null;
+  poolUrl: string | null;
+  algorithm: string | null;
+  assignedMiners: number | null;
+  hashrateTH: number | null;
+  powerW: number | null;
+  estimatedDailyRevenueUSD: number | null;
+  miners: MinerBasicInfo[];
+  generatedAt: string;
+}

@@ -1,25 +1,31 @@
 import { Search, Bell } from "lucide-react";
 import { useDashboardData } from "@/hooks/useTradingData";
+import { SpinnerValue } from "@/components/SpinnerValue";
 
 export function TopBar() {
-  const { data } = useDashboardData();
+  const { data, isPending } = useDashboardData();
+  const isLoading = isPending && !data;
 
-  const formatCurrency = (v: number) =>
-    v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const formatCurrency = (value: number) =>
+    value.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-  const connectionLabel = data.connection.connected
-    ? data.connection.testnet
-      ? "TESTNET"
-      : "LIVE"
-    : "DEMO";
+  const connectionLabel = data
+    ? data.connection.connected
+      ? data.connection.testnet
+        ? "TESTNET"
+        : "LIVE"
+      : "OFFLINE"
+    : "--";
 
-  const connectionTone = data.connection.connected
+  const connectionTone = data?.connection.connected
     ? "bg-positive/10 text-positive"
     : "bg-secondary text-muted-foreground";
 
+  const changePct = data?.portfolioChange24h;
+  const changeValue = data?.portfolioChange24hValue;
+
   return (
     <header className="h-16 flex items-center justify-between px-6 border-b border-border bg-card">
-      {/* Search */}
       <div className="flex items-center gap-3 bg-secondary rounded-md px-3 py-2 w-72">
         <Search className="h-4 w-4 text-muted-foreground" />
         <input
@@ -27,26 +33,42 @@ export function TopBar() {
           placeholder="Search assets, pairs..."
           className="bg-transparent text-sm font-mono text-foreground placeholder:text-muted-foreground outline-none w-full"
         />
-        <kbd className="text-[10px] font-mono text-muted-foreground border border-border rounded px-1.5 py-0.5">⌘K</kbd>
+        <kbd className="text-[10px] font-mono text-muted-foreground border border-border rounded px-1.5 py-0.5">Ctrl+K</kbd>
       </div>
 
-      {/* Portfolio Summary + Actions */}
       <div className="flex items-center gap-6">
-        <span className={`text-[10px] font-mono px-2 py-1 rounded ${connectionTone}`} title={data.connection.message}>
-          {connectionLabel}
+        <span className={`text-[10px] font-mono px-2 py-1 rounded ${connectionTone}`} title={data?.connection.message}>
+          <SpinnerValue loading={isLoading} value={connectionLabel} spinnerClassName="h-3.5 w-3.5" />
         </span>
+
         <div className="text-right">
           <div className="text-xs font-mono text-muted-foreground">Portfolio Value</div>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-mono font-semibold text-foreground">
-              {formatCurrency(data.totalPortfolioValue)}
-            </span>
-            <span className={`text-xs font-mono ${data.portfolioChange24h >= 0 ? "text-positive" : "text-negative"}`}>
-              {data.portfolioChange24h >= 0 ? "+" : ""}{data.portfolioChange24h}%
-            </span>
-            <span className={`text-xs font-mono ${data.portfolioChange24hValue >= 0 ? "text-positive" : "text-negative"}`}>
-              ({data.portfolioChange24hValue >= 0 ? "+" : ""}{formatCurrency(data.portfolioChange24hValue)})
-            </span>
+            <SpinnerValue
+              loading={isLoading}
+              value={data ? formatCurrency(data.totalPortfolioValue) : undefined}
+              className="text-sm font-mono font-semibold text-foreground"
+            />
+
+            <SpinnerValue
+              loading={isLoading}
+              value={
+                changePct !== undefined
+                  ? `${changePct >= 0 ? "+" : ""}${changePct}%`
+                  : undefined
+              }
+              className={`text-xs font-mono ${changePct !== undefined && changePct < 0 ? "text-negative" : "text-positive"}`}
+            />
+
+            <SpinnerValue
+              loading={isLoading}
+              value={
+                changeValue !== undefined
+                  ? `(${changeValue >= 0 ? "+" : ""}${formatCurrency(changeValue)})`
+                  : undefined
+              }
+              className={`text-xs font-mono ${changeValue !== undefined && changeValue < 0 ? "text-negative" : "text-positive"}`}
+            />
           </div>
         </div>
 

@@ -40,8 +40,31 @@ The API runs on `http://localhost:3001` by default.
 - `DELETE /api/binance/connection`
 - `GET /api/dashboard`
 - `GET /api/orders`
+- `GET /api/mining/overview`
+- `GET /api/mining/nicehash`
 
 ## Notes
 
-- If Binance credentials are unavailable or invalid, the API returns demo fallback data so the frontend remains usable.
+- If Binance credentials are unavailable or invalid, the API returns empty live-data responses (no demo/mock payloads).
 - Session credentials sent through `POST /api/binance/connection` are kept in memory only (not persisted to disk).
+
+### Optional Mining/NiceHash env inputs
+
+You can provide mining data from your own collector by setting these variables:
+
+- `MINERS_BASIC_JSON` (JSON array of miner objects)
+- `MINING_TOTAL_MINERS`
+- `MINING_ACTIVE_MINERS`
+- `MINING_TOTAL_HASHRATE_TH`
+- `MINING_TOTAL_POWER_W`
+- `MINING_AVG_CHIP_TEMP_C`
+- `MINING_EST_DAILY_REVENUE_USD`
+- `NICEHASH_CONNECTED`
+- `NICEHASH_POOL_STATUS`
+- `NICEHASH_POOL_NAME`
+- `NICEHASH_POOL_URL`
+- `NICEHASH_ALGORITHM`
+- `NICEHASH_ASSIGNED_MINERS`
+- `NICEHASH_HASHRATE_TH`
+- `NICEHASH_POWER_W`
+- `NICEHASH_EST_DAILY_REVENUE_USD`

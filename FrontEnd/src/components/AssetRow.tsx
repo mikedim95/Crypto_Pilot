@@ -1,4 +1,4 @@
-import { Asset } from "@/data/mockData";
+import type { Asset } from "@/types/api";
 import { cn } from "@/lib/utils";
 
 interface SparklineProps {
