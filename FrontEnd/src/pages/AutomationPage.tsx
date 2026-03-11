@@ -855,10 +855,200 @@ function pickModerateBaseStrategies(baseStrategyIds: string[]): string[] {
   return baseStrategyIds.slice(0, 3);
 }
 
-function createUsableStrategyDraft(baseStrategyIds: string[]): StrategyDraft {
-  const moderateBaseStrategies = pickModerateBaseStrategies(baseStrategyIds);
+function parseIntervalToMinutes(interval: string | undefined): number {
+  if (!interval) return 60;
+  const match = interval.trim().toLowerCase().match(/^(\d+)(m|h|d)$/);
+  if (!match) return 60;
+
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return 60;
+  if (match[2] === "m") return amount;
+  if (match[2] === "h") return amount * 60;
+  return amount * 24 * 60;
+}
+
+function chooseCommonScheduleInterval(strategies: StrategyConfig[]): string {
+  if (strategies.length === 0) return "1h";
+
+  const counters = new Map<string, { count: number; minutes: number }>();
+  strategies.forEach((strategy) => {
+    const key = strategy.scheduleInterval;
+    const current = counters.get(key);
+    if (current) {
+      counters.set(key, { ...current, count: current.count + 1 });
+    } else {
+      counters.set(key, { count: 1, minutes: parseIntervalToMinutes(key) });
+    }
+  });
+
+  return Array.from(counters.entries()).sort((left, right) => {
+    if (right[1].count !== left[1].count) return right[1].count - left[1].count;
+    if (left[1].minutes !== right[1].minutes) return left[1].minutes - right[1].minutes;
+    return left[0].localeCompare(right[0]);
+  })[0]?.[0] ?? "1h";
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function toFixedString(value: number, decimals = 2): string {
+  return Number(value.toFixed(decimals)).toString();
+}
+
+function rankFromLabel(value: string | undefined): number {
+  if (value === "low") return 0;
+  if (value === "high") return 2;
+  return 1;
+}
+
+function labelFromRank(value: number): "low" | "medium" | "high" {
+  if (value <= 0.67) return "low";
+  if (value >= 1.33) return "high";
+  return "medium";
+}
+
+function buildEqualWeightRows(strategyIds: string[]): DraftStrategyWeightRow[] {
+  const ids = Array.from(new Set(strategyIds)).sort((left, right) => left.localeCompare(right));
+  if (ids.length === 0) return [];
+
+  const baseUnits = Math.floor(10_000 / ids.length);
+  let remainingUnits = 10_000 - baseUnits * ids.length;
+
+  return ids.map((strategyId, index) => {
+    const units = baseUnits + (index < remainingUnits ? 1 : 0);
+    return {
+      id: newId("strategy-weight"),
+      strategyId,
+      weight: toFixedString(units / 100),
+    };
+  });
+}
+
+function buildMergedAllocationRows(strategies: StrategyConfig[]): DraftAllocationRow[] {
+  if (strategies.length === 0) {
+    return [
+      { id: newId("allocation"), symbol: "BTC", percent: "50" },
+      { id: newId("allocation"), symbol: "USDC", percent: "50" },
+    ];
+  }
+
+  const merged: Record<string, number> = {};
+  strategies.forEach((strategy) => {
+    Object.entries(strategy.baseAllocation).forEach(([symbol, percent]) => {
+      merged[symbol] = (merged[symbol] ?? 0) + percent / strategies.length;
+    });
+  });
+
+  return Object.entries(merged)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([symbol, percent]) => ({
+      id: newId("allocation"),
+      symbol,
+      percent: toFixedString(percent),
+    }));
+}
+
+function pickFallbackStrategyId(strategies: StrategyConfig[]): string {
+  if (strategies.length === 0) return "";
+
+  const preferred = ["drawdown-protection", "volatility-hedge"];
+  const preferredMatch = preferred.find((id) => strategies.some((strategy) => strategy.id === id));
+  if (preferredMatch) return preferredMatch;
+
+  return [...strategies]
+    .sort((left, right) => {
+      const leftStable = left.guards.min_stablecoin_pct ?? left.guards.cash_reserve_pct ?? 0;
+      const rightStable = right.guards.min_stablecoin_pct ?? right.guards.cash_reserve_pct ?? 0;
+      if (rightStable !== leftStable) return rightStable - leftStable;
+      return left.id.localeCompare(right.id);
+    })[0].id;
+}
+
+function applyAutomaticPrefill(draft: StrategyDraft, selectedStrategies: StrategyConfig[]): StrategyDraft {
+  if (selectedStrategies.length === 0) {
+    return {
+      ...draft,
+      strategyWeightRows: [],
+      selectionConfig: {
+        ...draft.selectionConfig,
+        fallbackStrategy: "",
+      },
+    };
+  }
+
+  const selectedIds = selectedStrategies.map((strategy) => strategy.id);
+  const riskAverage = average(selectedStrategies.map((strategy) => rankFromLabel(strategy.metadata?.riskLevel)));
+  const turnoverAverage = average(selectedStrategies.map((strategy) => rankFromLabel(strategy.metadata?.expectedTurnover)));
+  const stableAverage = average(selectedStrategies.map((strategy) => rankFromLabel(strategy.metadata?.stablecoinExposure)));
+
+  const maxSingleValues = selectedStrategies
+    .map((strategy) => strategy.guards.max_single_asset_pct)
+    .filter((value): value is number => typeof value === "number");
+  const minStableValues = selectedStrategies
+    .map((strategy) => strategy.guards.min_stablecoin_pct)
+    .filter((value): value is number => typeof value === "number");
+  const maxTradesValues = selectedStrategies
+    .map((strategy) => strategy.guards.max_trades_per_cycle)
+    .filter((value): value is number => typeof value === "number");
+  const minNotionalValues = selectedStrategies
+    .map((strategy) => strategy.guards.min_trade_notional)
+    .filter((value): value is number => typeof value === "number");
+  const cashReserveValues = selectedStrategies
+    .map((strategy) => strategy.guards.cash_reserve_pct)
+    .filter((value): value is number => typeof value === "number");
+
+  const maxSinglePct = maxSingleValues.length > 0 ? Math.min(...maxSingleValues) : 55;
+  const minStablePct = minStableValues.length > 0 ? Math.max(...minStableValues) : 12;
+  const maxTrades = maxTradesValues.length > 0 ? Math.min(...maxTradesValues) : 6;
+  const minNotional = minNotionalValues.length > 0 ? Math.max(...minNotionalValues) : 25;
+  const cashReserve = cashReserveValues.length > 0 ? Math.max(...cashReserveValues) : 8;
+
+  const maxActiveStrategies = Math.max(1, Math.min(3, selectedStrategies.length));
+  const minWeight = selectedStrategies.length >= 5 ? 5 : 10;
+  const maxWeight = Math.max(35, Math.min(60, Math.round(100 / selectedStrategies.length + 25)));
 
   return {
+    ...draft,
+    autoStrategyUsage: true,
+    scheduleInterval: chooseCommonScheduleInterval(selectedStrategies),
+    metadataRiskLevel: labelFromRank(riskAverage),
+    metadataExpectedTurnover: labelFromRank(turnoverAverage),
+    metadataStablecoinExposure: labelFromRank(stableAverage),
+    guards: {
+      ...draft.guards,
+      maxSingleAssetPct: toFixedString(maxSinglePct, 0),
+      minStablecoinPct: toFixedString(minStablePct, 0),
+      maxTradesPerCycle: toFixedString(maxTrades, 0),
+      minTradeNotional: toFixedString(minNotional, 0),
+      cashReservePct: toFixedString(cashReserve, 0),
+    },
+    baseAllocationRows: buildMergedAllocationRows(selectedStrategies),
+    strategyWeightRows: buildEqualWeightRows(selectedIds),
+    selectionConfig: {
+      ...draft.selectionConfig,
+      minStrategyScore: "0.45",
+      maxActiveStrategies: String(maxActiveStrategies),
+      maxWeightShiftPerCycle: "15",
+      strategyCooldownHours: "6",
+      minActiveDurationHours: "12",
+      fallbackStrategy: pickFallbackStrategyId(selectedStrategies),
+    },
+    weightAdjustment: {
+      ...draft.weightAdjustment,
+      scorePower: "1",
+      minWeightPctPerStrategy: String(minWeight),
+      maxWeightPctPerStrategy: String(maxWeight),
+    },
+  };
+}
+
+function createUsableStrategyDraft(baseStrategies: StrategyConfig[]): StrategyDraft {
+  const moderateBaseStrategies = pickModerateBaseStrategies(baseStrategies.map((strategy) => strategy.id));
+  const selectedStrategies = baseStrategies.filter((strategy) => moderateBaseStrategies.includes(strategy.id));
+
+  return applyAutomaticPrefill({
     name: "",
     description: "",
     executionMode: "semi_auto",
@@ -894,7 +1084,7 @@ function createUsableStrategyDraft(baseStrategyIds: string[]): StrategyDraft {
     },
     baseAllocationRows: [{ id: newId("allocation"), symbol: "BTC", percent: "50" }, { id: newId("allocation"), symbol: "USDC", percent: "50" }],
     rules: [],
-  };
+  }, selectedStrategies);
 }
 
 export function AutomationPage() {
@@ -994,6 +1184,14 @@ export function AutomationPage() {
       readOnlyStrategies
         .map((strategy) => ({ id: strategy.id, name: strategy.name }))
         .sort((left, right) => left.name.localeCompare(right.name)),
+    [readOnlyStrategies]
+  );
+  const baseStrategyById = useMemo(
+    () =>
+      readOnlyStrategies.reduce<Map<string, StrategyConfig>>((acc, strategy) => {
+        acc.set(strategy.id, strategy);
+        return acc;
+      }, new Map<string, StrategyConfig>()),
     [readOnlyStrategies]
   );
   const selectedBaseStrategyIds = useMemo(
@@ -1228,11 +1426,20 @@ export function AutomationPage() {
       const selected = parseStrategyIdCsv(previous.baseStrategiesCsv);
       const exists = selected.includes(strategyId);
       const next = exists ? selected.filter((item) => item !== strategyId) : [...selected, strategyId];
-
-      return {
+      const updatedDraft: StrategyDraft = {
         ...previous,
         baseStrategiesCsv: toStrategyIdCsv(next),
       };
+
+      if (updatedDraft.compositionMode !== "automatic") {
+        return updatedDraft;
+      }
+
+      const selectedStrategies = next
+        .map((id) => baseStrategyById.get(id))
+        .filter((item): item is StrategyConfig => Boolean(item));
+
+      return applyAutomaticPrefill(updatedDraft, selectedStrategies);
     });
   };
 
@@ -1330,7 +1537,7 @@ export function AutomationPage() {
 
   const handleResetDraft = (): void => {
     if (editorMode === "create") {
-      setDraft(createUsableStrategyDraft(readOnlyStrategies.map((strategy) => strategy.id)));
+      setDraft(createUsableStrategyDraft(readOnlyStrategies));
       setDraftDirty(false);
       return;
     }
@@ -1387,7 +1594,7 @@ export function AutomationPage() {
 
   const openCreateStrategyEditor = (): void => {
     setEditorMode("create");
-    setDraft(createUsableStrategyDraft(readOnlyStrategies.map((strategy) => strategy.id)));
+    setDraft(createUsableStrategyDraft(readOnlyStrategies));
     setDraftStrategyId("");
     setDraftDirty(false);
     setIsEditorModalOpen(true);
@@ -1661,7 +1868,24 @@ export function AutomationPage() {
                   <select
                     value={draft.compositionMode}
                     onChange={(event) =>
-                      updateDraft((prev) => ({ ...prev, compositionMode: event.target.value as StrategyCompositionMode }))
+                      updateDraft((prev) => {
+                        const compositionMode = event.target.value as StrategyCompositionMode;
+                        const updated: StrategyDraft = {
+                          ...prev,
+                          compositionMode,
+                          autoStrategyUsage: compositionMode === "automatic" ? true : prev.autoStrategyUsage,
+                        };
+
+                        if (compositionMode !== "automatic") {
+                          return updated;
+                        }
+
+                        const selectedIds = parseStrategyIdCsv(updated.baseStrategiesCsv);
+                        const selectedStrategies = selectedIds
+                          .map((id) => baseStrategyById.get(id))
+                          .filter((item): item is StrategyConfig => Boolean(item));
+                        return applyAutomaticPrefill(updated, selectedStrategies);
+                      })
                     }
                     className={editorFieldClass(false)}
                   >
@@ -1717,7 +1941,19 @@ export function AutomationPage() {
                 <input
                   type="checkbox"
                   checked={draft.autoStrategyUsage}
-                  onChange={(event) => updateDraft((prev) => ({ ...prev, autoStrategyUsage: event.target.checked }))}
+                  onChange={(event) =>
+                    updateDraft((prev) => {
+                      const autoStrategyUsage = event.target.checked;
+                      const updated: StrategyDraft = { ...prev, autoStrategyUsage };
+                      if (!autoStrategyUsage) return updated;
+
+                      const selectedIds = parseStrategyIdCsv(updated.baseStrategiesCsv);
+                      const selectedStrategies = selectedIds
+                        .map((id) => baseStrategyById.get(id))
+                        .filter((item): item is StrategyConfig => Boolean(item));
+                      return applyAutomaticPrefill(updated, selectedStrategies);
+                    })
+                  }
                   className="h-4 w-4"
                 />
                 Auto Strategy Usage
