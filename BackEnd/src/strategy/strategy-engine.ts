@@ -3,12 +3,13 @@ import { generateExecutionPlan } from "./execution-plan-generator.js";
 import { buildRebalancePlan } from "./rebalance-planner.js";
 import { evaluateRules } from "./rule-evaluator.js";
 import { mergeAssetUniverse, normalizeAllocation, withAllAssets } from "./allocation-utils.js";
-import { MarketSignalSnapshot, PortfolioState, StrategyConfig, StrategyEvaluationResult } from "./types.js";
+import { MarketSignalSnapshot, PortfolioAccountType, PortfolioState, StrategyConfig, StrategyEvaluationResult } from "./types.js";
 
 interface StrategyEngineInput {
   strategy: StrategyConfig;
   portfolio: PortfolioState;
   marketSignals: MarketSignalSnapshot;
+  accountType?: PortfolioAccountType;
   modeOverride?: StrategyConfig["executionMode"];
 }
 
@@ -45,6 +46,7 @@ export class StrategyEngine {
 
     const executionPlan = generateExecutionPlan({
       strategyId: input.strategy.id,
+      accountType: input.accountType ?? "real",
       mode: input.modeOverride ?? input.strategy.executionMode,
       currentAllocation,
       targetAllocation: adjustedTargetAllocation,

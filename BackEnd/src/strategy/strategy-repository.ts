@@ -5,6 +5,7 @@ import {
   BacktestRun,
   BacktestRunStatus,
   BacktestStep,
+  DemoAccountSettings,
   ExecutionPlan,
   StrategyConfig,
   StrategyRun,
@@ -14,13 +15,89 @@ import {
 import { buildPresetStrategies } from "./strategy-presets.js";
 import { createNextRunAt } from "./allocation-utils.js";
 
+const DEFAULT_DEMO_ACCOUNT_BALANCE = 10_000;
+const DEFAULT_DEMO_UPDATED_AT = new Date().toISOString();
+
+function parsePositiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function createDefaultDemoAccountSettings(): DemoAccountSettings {
+  return {
+    balance: parsePositiveNumber(process.env.DEMO_ACCOUNT_CAPITAL, DEFAULT_DEMO_ACCOUNT_BALANCE),
+    updatedAt: DEFAULT_DEMO_UPDATED_AT,
+  };
+}
+
 const DEFAULT_STORE: StrategyStoreData = {
   strategies: [],
   strategyRuns: [],
   executionPlans: [],
   backtestRuns: [],
   backtestSteps: [],
+  demoAccount: createDefaultDemoAccountSettings(),
 };
+
+function normalizeExecutionPlan(entry: Partial<ExecutionPlan>): ExecutionPlan | null {
+  if (
+    typeof entry.id !== "string" ||
+    typeof entry.strategyId !== "string" ||
+    typeof entry.timestamp !== "string" ||
+    typeof entry.mode !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    ...(entry as ExecutionPlan),
+    accountType: entry.accountType === "demo" ? "demo" : "real",
+    warnings: Array.isArray(entry.warnings) ? entry.warnings : [],
+    recommendedTrades: Array.isArray(entry.recommendedTrades) ? entry.recommendedTrades : [],
+  };
+}
+
+function normalizeStrategyRun(entry: Partial<StrategyRun>): StrategyRun | null {
+  if (
+    typeof entry.id !== "string" ||
+    typeof entry.strategyId !== "string" ||
+    typeof entry.startedAt !== "string" ||
+    typeof entry.status !== "string" ||
+    typeof entry.mode !== "string" ||
+    typeof entry.trigger !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    ...(entry as StrategyRun),
+    accountType: entry.accountType === "demo" ? "demo" : "real",
+    warnings: Array.isArray(entry.warnings) ? entry.warnings : [],
+  };
+}
+
+function normalizeDemoAccountSettings(entry: unknown): DemoAccountSettings {
+  if (!entry || typeof entry !== "object") {
+    return createDefaultDemoAccountSettings();
+  }
+
+  const shape = entry as Partial<DemoAccountSettings>;
+  const defaultSettings = createDefaultDemoAccountSettings();
+  const balance =
+    typeof shape.balance === "number" && Number.isFinite(shape.balance) && shape.balance > 0
+      ? shape.balance
+      : defaultSettings.balance;
+  const updatedAt =
+    typeof shape.updatedAt === "string" && shape.updatedAt.trim().length > 0
+      ? shape.updatedAt
+      : defaultSettings.updatedAt;
+
+  return {
+    balance,
+    updatedAt,
+  };
+}
 
 function cloneStore(store: StrategyStoreData): StrategyStoreData {
   return {
@@ -29,6 +106,7 @@ function cloneStore(store: StrategyStoreData): StrategyStoreData {
     executionPlans: [...store.executionPlans],
     backtestRuns: [...store.backtestRuns],
     backtestSteps: [...store.backtestSteps],
+    demoAccount: { ...store.demoAccount },
   };
 }
 
@@ -37,10 +115,19 @@ function parseStore(raw: string): StrategyStoreData {
     const parsed = JSON.parse(raw) as Partial<StrategyStoreData>;
     return {
       strategies: Array.isArray(parsed.strategies) ? parsed.strategies : [],
-      strategyRuns: Array.isArray(parsed.strategyRuns) ? parsed.strategyRuns : [],
-      executionPlans: Array.isArray(parsed.executionPlans) ? parsed.executionPlans : [],
+      strategyRuns: Array.isArray(parsed.strategyRuns)
+        ? parsed.strategyRuns
+            .map((item) => normalizeStrategyRun(item as Partial<StrategyRun>))
+            .filter((item): item is StrategyRun => item !== null)
+        : [],
+      executionPlans: Array.isArray(parsed.executionPlans)
+        ? parsed.executionPlans
+            .map((item) => normalizeExecutionPlan(item as Partial<ExecutionPlan>))
+            .filter((item): item is ExecutionPlan => item !== null)
+        : [],
       backtestRuns: Array.isArray(parsed.backtestRuns) ? parsed.backtestRuns : [],
       backtestSteps: Array.isArray(parsed.backtestSteps) ? parsed.backtestSteps : [],
+      demoAccount: normalizeDemoAccountSettings((parsed as { demoAccount?: unknown }).demoAccount),
     };
   } catch {
     return cloneStore(DEFAULT_STORE);
@@ -217,9 +304,25 @@ export class StrategyRepository {
     );
   }
 
+  async getDemoAccountSettings(): Promise<DemoAccountSettings> {
+    return this.readAfterWrites((store) => ({ ...store.demoAccount }));
+  }
+
+  async setDemoAccountBalance(balance: number): Promise<DemoAccountSettings> {
+    return this.mutate((store) => {
+      const safeBalance = Number.isFinite(balance) && balance > 0 ? balance : store.demoAccount.balance;
+      store.demoAccount = {
+        balance: safeBalance,
+        updatedAt: new Date().toISOString(),
+      };
+      return { ...store.demoAccount };
+    });
+  }
+
   async createStrategyRun(input: {
     strategyId: string;
     status: StrategyRunStatus;
+    accountType: StrategyRun["accountType"];
     mode: StrategyRun["mode"];
     trigger: StrategyRun["trigger"];
     inputSnapshot?: StrategyRun["inputSnapshot"];
@@ -230,6 +333,7 @@ export class StrategyRepository {
         strategyId: input.strategyId,
         startedAt: new Date().toISOString(),
         status: input.status,
+        accountType: input.accountType,
         mode: input.mode,
         trigger: input.trigger,
         inputSnapshot: input.inputSnapshot,
@@ -251,9 +355,11 @@ export class StrategyRepository {
     });
   }
 
-  async listStrategyRuns(limit = 200): Promise<StrategyRun[]> {
+  async listStrategyRuns(limit = 200, accountType?: StrategyRun["accountType"]): Promise<StrategyRun[]> {
     return this.readAfterWrites((store) =>
-      orderByIsoDescending(store.strategyRuns).slice(0, limit)
+      orderByIsoDescending(store.strategyRuns)
+        .filter((run) => (accountType ? run.accountType === accountType : true))
+        .slice(0, limit)
     );
   }
 
@@ -278,10 +384,13 @@ export class StrategyRepository {
     return this.readAfterWrites((store) => store.executionPlans.find((item) => item.id === planId) ?? null);
   }
 
-  async getLatestExecutionPlanByStrategy(strategyId: string): Promise<ExecutionPlan | null> {
+  async getLatestExecutionPlanByStrategy(
+    strategyId: string,
+    accountType?: ExecutionPlan["accountType"]
+  ): Promise<ExecutionPlan | null> {
     return this.readAfterWrites((store) => {
       const plans = store.executionPlans
-        .filter((plan) => plan.strategyId === strategyId)
+        .filter((plan) => plan.strategyId === strategyId && (accountType ? plan.accountType === accountType : true))
         .sort((left, right) => right.timestamp.localeCompare(left.timestamp));
       return plans[0] ?? null;
     });

@@ -1,9 +1,10 @@
 import { StrategyEngine } from "./strategy-engine.js";
 import { StrategyRepository } from "./strategy-repository.js";
 import { buildMarketSignalsFromPortfolio } from "./market-signal-service.js";
-import { getLivePortfolioState } from "./portfolio-state-service.js";
+import { getPortfolioState } from "./portfolio-state-service.js";
 import {
   MarketSignalSnapshot,
+  PortfolioAccountType,
   PortfolioState,
   StrategyConfig,
   StrategyEvaluationResult,
@@ -15,26 +16,49 @@ export class StrategyRunner {
 
   constructor(private readonly repository: StrategyRepository, private readonly engine = new StrategyEngine()) {}
 
-  isRunning(strategyId: string): boolean {
-    return this.activeStrategies.has(strategyId);
+  private runKey(strategyId: string, accountType: PortfolioAccountType): string {
+    return `${strategyId}:${accountType}`;
   }
 
-  async evaluateStrategyState(strategyId: string): Promise<{
+  isRunning(strategyId: string, accountType: PortfolioAccountType = "real"): boolean {
+    return this.activeStrategies.has(this.runKey(strategyId, accountType));
+  }
+
+  private async resolveDemoBalance(accountType: PortfolioAccountType): Promise<number | undefined> {
+    if (accountType !== "demo") return undefined;
+    const demoSettings = await this.repository.getDemoAccountSettings();
+    return demoSettings.balance;
+  }
+
+  async evaluateStrategyState(
+    strategyId: string,
+    accountType?: PortfolioAccountType
+  ): Promise<{
     strategy: StrategyConfig;
     evaluation: StrategyEvaluationResult;
     portfolio: PortfolioState;
     marketSignals: MarketSignalSnapshot;
+    accountType: PortfolioAccountType;
+  } | null>;
+  async evaluateStrategyState(strategyId: string, accountType: PortfolioAccountType = "real"): Promise<{
+    strategy: StrategyConfig;
+    evaluation: StrategyEvaluationResult;
+    portfolio: PortfolioState;
+    marketSignals: MarketSignalSnapshot;
+    accountType: PortfolioAccountType;
   } | null> {
     const strategy = await this.repository.getStrategy(strategyId);
     if (!strategy) return null;
 
-    const portfolio = await getLivePortfolioState();
+    const demoBalance = await this.resolveDemoBalance(accountType);
+    const portfolio = await getPortfolioState(accountType, "USDC", { demoCapital: demoBalance });
     const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
 
     const evaluation = this.engine.evaluate({
       strategy,
       portfolio,
       marketSignals,
+      accountType,
     });
 
     return {
@@ -42,19 +66,27 @@ export class StrategyRunner {
       evaluation,
       portfolio,
       marketSignals,
+      accountType,
     };
   }
 
-  async runStrategy(strategyId: string, trigger: StrategyRun["trigger"] = "api"): Promise<StrategyRun> {
+  async runStrategy(
+    strategyId: string,
+    trigger: StrategyRun["trigger"] = "api",
+    accountType: PortfolioAccountType = "real"
+  ): Promise<StrategyRun> {
     const strategy = await this.repository.getStrategy(strategyId);
     if (!strategy) {
       throw new Error(`Strategy ${strategyId} was not found.`);
     }
 
-    if (this.activeStrategies.has(strategyId)) {
+    const runKey = this.runKey(strategyId, accountType);
+
+    if (this.activeStrategies.has(runKey)) {
       return this.repository.createStrategyRun({
         strategyId,
         status: "skipped",
+        accountType,
         mode: strategy.executionMode,
         trigger,
       });
@@ -64,22 +96,25 @@ export class StrategyRunner {
       return this.repository.createStrategyRun({
         strategyId,
         status: "skipped",
+        accountType,
         mode: strategy.executionMode,
         trigger,
       });
     }
 
-    this.activeStrategies.add(strategyId);
+    this.activeStrategies.add(runKey);
 
     let run = await this.repository.createStrategyRun({
       strategyId,
       status: "running",
+      accountType,
       mode: strategy.executionMode,
       trigger,
     });
 
     try {
-      const portfolio = await getLivePortfolioState();
+      const demoBalance = await this.resolveDemoBalance(accountType);
+      const portfolio = await getPortfolioState(accountType, "USDC", { demoCapital: demoBalance });
       const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
 
       run = (await this.repository.updateStrategyRun(run.id, {
@@ -93,6 +128,7 @@ export class StrategyRunner {
         strategy,
         portfolio,
         marketSignals,
+        accountType,
       });
 
       await this.repository.saveExecutionPlan(evaluation.executionPlan);
@@ -101,6 +137,7 @@ export class StrategyRunner {
       const completed = await this.repository.updateStrategyRun(run.id, {
         status: "completed",
         completedAt,
+        accountType,
         adjustedAllocation: evaluation.adjustedTargetAllocation,
         executionPlanId: evaluation.executionPlan.id,
         warnings: evaluation.warnings,
@@ -118,7 +155,7 @@ export class StrategyRunner {
 
       return failed ?? run;
     } finally {
-      this.activeStrategies.delete(strategyId);
+      this.activeStrategies.delete(runKey);
     }
   }
 }

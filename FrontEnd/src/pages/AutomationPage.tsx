@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { backendApi } from "@/lib/api";
-import { useBacktests, useStrategies, useStrategyRunDetails, useStrategyRuns } from "@/hooks/useTradingData";
-import type { BacktestCreateRequest, StrategyConfig, StrategyMode } from "@/types/api";
+import { useBacktests, useDemoAccountSettings, useStrategies, useStrategyRunDetails, useStrategyRuns } from "@/hooks/useTradingData";
+import type { BacktestCreateRequest, PortfolioAccountType, StrategyConfig, StrategyMode } from "@/types/api";
 import { SpinnerValue } from "@/components/SpinnerValue";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +49,28 @@ interface StrategyDraft {
   rules: DraftRule[];
 }
 
+type GuardField = keyof StrategyDraft["guards"];
+
+interface DraftRuleErrors {
+  id?: string;
+  priority?: string;
+  conditionValue?: string;
+  actionPercent?: string;
+  actionAsset?: string;
+  actionFrom?: string;
+  actionTo?: string;
+}
+
+interface DraftValidationErrors {
+  name?: string;
+  scheduleInterval?: string;
+  disabledAssetsCsv?: string;
+  baseAllocation?: string;
+  guards: Partial<Record<GuardField, string>>;
+  baseAllocationRows: Record<string, { symbol?: string; percent?: string }>;
+  rules: Record<string, DraftRuleErrors>;
+}
+
 const MODE_OPTIONS: StrategyMode[] = ["manual", "semi_auto", "auto"];
 const INDICATOR_OPTIONS = [
   "volatility",
@@ -71,9 +93,230 @@ const ACTION_TYPE_OPTIONS = [
 const RISK_OPTIONS = ["", "low", "medium", "high"];
 const TURNOVER_OPTIONS = ["", "low", "medium", "high"];
 const STABLE_EXPOSURE_OPTIONS = ["", "low", "medium", "high"];
+const SCHEDULE_INTERVAL_PATTERN = /^\d+(m|h|d)$/;
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function validateOptionalNumericField(
+  value: string,
+  label: string,
+  options?: { integer?: boolean; min?: number; max?: number }
+): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return `${label} must be numeric.`;
+  }
+
+  if (options?.integer && !Number.isInteger(parsed)) {
+    return `${label} must be an integer.`;
+  }
+
+  if (typeof options?.min === "number" && parsed < options.min) {
+    return `${label} must be >= ${options.min}.`;
+  }
+
+  if (typeof options?.max === "number" && parsed > options.max) {
+    return `${label} must be <= ${options.max}.`;
+  }
+
+  return undefined;
+}
+
+function validateDraft(draft: StrategyDraft): DraftValidationErrors {
+  const errors: DraftValidationErrors = {
+    guards: {},
+    baseAllocationRows: {},
+    rules: {},
+  };
+
+  if (!draft.name.trim()) {
+    errors.name = "Strategy name is required.";
+  }
+
+  const scheduleInterval = draft.scheduleInterval.trim().toLowerCase();
+  if (!scheduleInterval) {
+    errors.scheduleInterval = "Schedule interval is required.";
+  } else if (!SCHEDULE_INTERVAL_PATTERN.test(scheduleInterval)) {
+    errors.scheduleInterval = "Use format like 15m, 1h, or 1d.";
+  }
+
+  errors.guards.maxSingleAssetPct = validateOptionalNumericField(
+    draft.guards.maxSingleAssetPct,
+    "Max single %",
+    { min: 0, max: 100 }
+  );
+  errors.guards.minStablecoinPct = validateOptionalNumericField(
+    draft.guards.minStablecoinPct,
+    "Min stable %",
+    { min: 0, max: 100 }
+  );
+  errors.guards.maxTradesPerCycle = validateOptionalNumericField(
+    draft.guards.maxTradesPerCycle,
+    "Max trades",
+    { integer: true, min: 0 }
+  );
+  errors.guards.minTradeNotional = validateOptionalNumericField(
+    draft.guards.minTradeNotional,
+    "Min notional",
+    { min: 0 }
+  );
+  errors.guards.cashReservePct = validateOptionalNumericField(
+    draft.guards.cashReservePct,
+    "Cash reserve %",
+    { min: 0, max: 100 }
+  );
+
+  let hasAnyBaseSymbol = false;
+  for (const row of draft.baseAllocationRows) {
+    const rowErrors: { symbol?: string; percent?: string } = {};
+    const symbol = row.symbol.trim().toUpperCase();
+    const percentRaw = row.percent.trim();
+
+    if (symbol) {
+      hasAnyBaseSymbol = true;
+      if (!/^[A-Z0-9_]+$/.test(symbol)) {
+        rowErrors.symbol = "Use uppercase letters/numbers only.";
+      }
+    }
+
+    if (percentRaw && !symbol) {
+      rowErrors.symbol = "Symbol is required when percent is set.";
+    }
+
+    if (symbol && !percentRaw) {
+      rowErrors.percent = "Percent is required when symbol is set.";
+    } else if (percentRaw) {
+      const parsedPercent = Number(percentRaw);
+      if (!Number.isFinite(parsedPercent)) {
+        rowErrors.percent = "Percent must be numeric.";
+      } else if (parsedPercent < 0) {
+        rowErrors.percent = "Percent cannot be negative.";
+      }
+    }
+
+    if (rowErrors.symbol || rowErrors.percent) {
+      errors.baseAllocationRows[row.id] = rowErrors;
+    }
+  }
+
+  if (!hasAnyBaseSymbol) {
+    errors.baseAllocation = "Add at least one base allocation symbol.";
+  }
+
+  const disabledAssets = draft.disabledAssetsCsv
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const invalidDisabledAsset = disabledAssets.find((value) => !/^[A-Za-z0-9_]+$/.test(value));
+  if (invalidDisabledAsset) {
+    errors.disabledAssetsCsv = `Invalid disabled asset: ${invalidDisabledAsset}`;
+  }
+
+  const seenRuleIds = new Set<string>();
+  draft.rules.forEach((rule, index) => {
+    const ruleErrors: DraftRuleErrors = {};
+    const mapKey = String(index);
+
+    const ruleId = rule.id.trim();
+    if (!ruleId) {
+      ruleErrors.id = "Rule ID is required.";
+    } else {
+      const normalizedRuleId = ruleId.toLowerCase();
+      if (seenRuleIds.has(normalizedRuleId)) {
+        ruleErrors.id = "Rule ID must be unique.";
+      }
+      seenRuleIds.add(normalizedRuleId);
+    }
+
+    const priority = Number(rule.priority);
+    if (!Number.isInteger(priority) || priority <= 0) {
+      ruleErrors.priority = "Priority must be a positive integer.";
+    }
+
+    const conditionValue = Number(rule.conditionValue);
+    if (!Number.isFinite(conditionValue)) {
+      ruleErrors.conditionValue = "Condition value must be numeric.";
+    }
+
+    const actionPercent = Number(rule.actionPercent);
+    if (!Number.isFinite(actionPercent) || actionPercent <= 0) {
+      ruleErrors.actionPercent = "Percent must be greater than 0.";
+    }
+
+    if ((rule.actionType === "increase" || rule.actionType === "decrease") && !rule.actionAsset.trim()) {
+      ruleErrors.actionAsset = "Action asset is required for increase/decrease.";
+    }
+
+    if (rule.actionType === "shift") {
+      if (!rule.actionFrom.trim()) {
+        ruleErrors.actionFrom = "From is required for shift.";
+      }
+      if (!rule.actionTo.trim()) {
+        ruleErrors.actionTo = "To is required for shift.";
+      }
+      if (
+        rule.actionFrom.trim() &&
+        rule.actionTo.trim() &&
+        rule.actionFrom.trim().toUpperCase() === rule.actionTo.trim().toUpperCase()
+      ) {
+        ruleErrors.actionTo = "From and To must be different.";
+      }
+    }
+
+    if (Object.values(ruleErrors).some(Boolean)) {
+      errors.rules[mapKey] = ruleErrors;
+    }
+  });
+
+  return errors;
+}
+
+function hasDraftValidationErrors(errors: DraftValidationErrors): boolean {
+  if (errors.name || errors.scheduleInterval || errors.disabledAssetsCsv || errors.baseAllocation) {
+    return true;
+  }
+
+  if (Object.values(errors.guards).some(Boolean)) {
+    return true;
+  }
+
+  if (Object.values(errors.baseAllocationRows).some((rowErrors) => rowErrors.symbol || rowErrors.percent)) {
+    return true;
+  }
+
+  if (Object.values(errors.rules).some((ruleErrors) => Object.values(ruleErrors).some(Boolean))) {
+    return true;
+  }
+
+  return false;
+}
+
+function firstDraftValidationError(errors: DraftValidationErrors): string | undefined {
+  if (errors.name) return errors.name;
+  if (errors.scheduleInterval) return errors.scheduleInterval;
+  if (errors.baseAllocation) return errors.baseAllocation;
+  if (errors.disabledAssetsCsv) return errors.disabledAssetsCsv;
+
+  const firstGuardError = Object.values(errors.guards).find(Boolean);
+  if (firstGuardError) return firstGuardError;
+
+  for (const rowError of Object.values(errors.baseAllocationRows)) {
+    if (rowError.symbol) return rowError.symbol;
+    if (rowError.percent) return rowError.percent;
+  }
+
+  for (const ruleError of Object.values(errors.rules)) {
+    for (const message of Object.values(ruleError)) {
+      if (message) return message;
+    }
+  }
+
+  return undefined;
 }
 
 function formatDateTime(value: string | undefined): string {
@@ -81,6 +324,11 @@ function formatDateTime(value: string | undefined): string {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return "--";
   return parsed.toLocaleString();
+}
+
+function formatUsd(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
+  return value.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
 function formatDuration(startedAt: string | undefined, completedAt: string | undefined): string {
@@ -294,9 +542,11 @@ function draftToPayload(draft: StrategyDraft, strategyId: string): unknown {
 
 export function AutomationPage() {
   const queryClient = useQueryClient();
+  const [accountType, setAccountType] = useState<PortfolioAccountType>("real");
 
   const { data: strategyData, isPending: loadingStrategies, error: strategyError } = useStrategies();
-  const { data: runData, isPending: loadingRuns } = useStrategyRuns();
+  const { data: demoAccountData, isPending: loadingDemoAccount } = useDemoAccountSettings();
+  const { data: runData, isPending: loadingRuns } = useStrategyRuns(accountType);
   const { data: backtestData, isPending: loadingBacktests } = useBacktests();
 
   const strategies = strategyData?.strategies ?? [];
@@ -308,6 +558,7 @@ export function AutomationPage() {
 
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [demoBalanceDraft, setDemoBalanceDraft] = useState("");
 
   const [draft, setDraft] = useState<StrategyDraft | null>(null);
   const [draftStrategyId, setDraftStrategyId] = useState("");
@@ -331,10 +582,22 @@ export function AutomationPage() {
   }, [selectedStrategyId, strategies]);
 
   useEffect(() => {
-    if ((!selectedRunId || !runs.some((run) => run.id === selectedRunId)) && runs.length > 0) {
+    if (runs.length === 0) {
+      setSelectedRunId("");
+      return;
+    }
+
+    if (!selectedRunId || !runs.some((run) => run.id === selectedRunId)) {
       setSelectedRunId(runs[0].id);
     }
   }, [selectedRunId, runs]);
+
+  useEffect(() => {
+    const balance = demoAccountData?.demoAccount.balance;
+    if (typeof balance === "number" && Number.isFinite(balance)) {
+      setDemoBalanceDraft(String(balance));
+    }
+  }, [demoAccountData?.demoAccount.balance]);
 
   const selectedStrategy = useMemo(
     () => strategies.find((strategy) => strategy.id === selectedStrategyId) ?? null,
@@ -355,23 +618,27 @@ export function AutomationPage() {
   const { data: runDetailsData, isPending: loadingRunDetails } = useStrategyRunDetails(selectedRunId || undefined);
   const selectedRun = runDetailsData?.run ?? runs.find((run) => run.id === selectedRunId) ?? null;
   const selectedRunExecutionPlan = runDetailsData?.executionPlan ?? null;
+  const selectedStrategyLastRunAt = useMemo(
+    () => runs.find((run) => run.strategyId === selectedStrategyId)?.startedAt ?? selectedStrategy?.lastRunAt,
+    [runs, selectedStrategy?.lastRunAt, selectedStrategyId]
+  );
 
   const invalidateAll = async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["strategies"] }),
-      queryClient.invalidateQueries({ queryKey: ["strategy-runs"] }),
+      queryClient.invalidateQueries({ queryKey: ["strategy-runs", accountType] }),
       queryClient.invalidateQueries({ queryKey: ["strategy-run", selectedRunId] }),
-      queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId] }),
-      queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId] }),
+      queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId, accountType] }),
+      queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId, accountType] }),
       queryClient.invalidateQueries({ queryKey: ["backtests"] }),
     ]);
   };
 
   const runNowMutation = useMutation({
-    mutationFn: (strategyId: string) => backendApi.runStrategyNow(strategyId),
+    mutationFn: (strategyId: string) => backendApi.runStrategyNow(strategyId, accountType),
     onSuccess: async (result) => {
       setErrorMessage("");
-      setMessage(`Strategy run created: ${result.run.status}.`);
+      setMessage(`Strategy run created (${result.run.accountType}): ${result.run.status}.`);
       await invalidateAll();
     },
     onError: (error) => {
@@ -428,11 +695,41 @@ export function AutomationPage() {
     },
   });
 
+  const updateDemoBalanceMutation = useMutation({
+    mutationFn: (balance: number) => backendApi.updateDemoAccountSettings(balance),
+    onSuccess: async (result) => {
+      setErrorMessage("");
+      setMessage(`Demo balance updated to ${formatUsd(result.demoAccount.balance)}.`);
+      setDemoBalanceDraft(String(result.demoAccount.balance));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["demo-account-settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId, "demo"] }),
+        queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId, "demo"] }),
+      ]);
+    },
+    onError: (error) => {
+      setMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update demo balance.");
+    },
+  });
+
   const busy =
     runNowMutation.isPending ||
     toggleMutation.isPending ||
     saveStrategyMutation.isPending ||
-    backtestMutation.isPending;
+    backtestMutation.isPending ||
+    updateDemoBalanceMutation.isPending;
+
+  const draftValidation = useMemo(() => (draft ? validateDraft(draft) : null), [draft]);
+  const draftHasErrors = draftValidation ? hasDraftValidationErrors(draftValidation) : false;
+
+  const editorFieldClass = (hasError?: boolean, compact?: boolean): string =>
+    cn(
+      "mt-1 w-full rounded border bg-secondary text-foreground outline-none",
+      compact ? "px-2 py-1.5" : "px-2 py-2",
+      hasError ? "border-negative" : "border-border"
+    );
+  const inlineErrorClass = "mt-1 text-[11px] font-mono text-negative";
 
   const updateDraft = (updater: (previous: StrategyDraft) => StrategyDraft): void => {
     setDraft((previous) => {
@@ -508,6 +805,11 @@ export function AutomationPage() {
 
   const handleSaveStrategy = (): void => {
     if (!selectedStrategy || !draft) return;
+    if (draftValidation && draftHasErrors) {
+      setMessage("");
+      setErrorMessage(firstDraftValidationError(draftValidation) ?? "Fix validation errors before saving.");
+      return;
+    }
 
     try {
       const payload = draftToPayload(draft, selectedStrategy.id);
@@ -553,14 +855,111 @@ export function AutomationPage() {
     });
   };
 
+  const handleSaveDemoBalance = (): void => {
+    const parsed = Number(demoBalanceDraft);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setMessage("");
+      setErrorMessage("Demo balance must be a positive number.");
+      return;
+    }
+
+    updateDemoBalanceMutation.mutate(parsed);
+  };
+
   const runIndicators = selectedRun?.inputSnapshot?.marketSignals.indicators ?? {};
+  const demoBalanceCurrent = demoAccountData?.demoAccount.balance;
+  const demoBalanceParsed = Number(demoBalanceDraft);
+  const demoBalanceDirty =
+    typeof demoBalanceCurrent === "number" &&
+    Number.isFinite(demoBalanceCurrent) &&
+    Number.isFinite(demoBalanceParsed) &&
+    demoBalanceParsed > 0 &&
+    Math.abs(demoBalanceParsed - demoBalanceCurrent) > 0.000001;
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h2 className="text-lg font-mono font-semibold text-foreground">Automation</h2>
-        <p className="text-sm text-muted-foreground mt-1">Structured strategy editor, run detail explorer, and backtesting.</p>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h2 className="text-lg font-mono font-semibold text-foreground">Automation</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Structured strategy editor, run detail explorer, and backtesting.
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Active account:{" "}
+            <span className="font-mono text-foreground">
+              {accountType === "demo" ? "Demo (uses live market data)" : "Real Money"}
+            </span>
+          </p>
+        </div>
+
+        <div className="inline-flex rounded-md border border-border overflow-hidden">
+          <button
+            onClick={() => setAccountType("real")}
+            className={cn(
+              "px-3 py-2 text-xs font-mono transition-colors",
+              accountType === "real"
+                ? "bg-primary text-primary-foreground"
+                : "bg-secondary text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Real Money
+          </button>
+          <button
+            onClick={() => setAccountType("demo")}
+            className={cn(
+              "px-3 py-2 text-xs font-mono transition-colors border-l border-border",
+              accountType === "demo"
+                ? "bg-primary text-primary-foreground"
+                : "bg-secondary text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Demo Account
+          </button>
+        </div>
       </div>
+
+      {accountType === "demo" ? (
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Demo Balance</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            This balance is used for subsequent demo strategy evaluations and run-now executions.
+          </div>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="w-full sm:max-w-xs">
+              <label className="text-xs font-mono text-muted-foreground">Balance (USD)</label>
+              <input
+                value={demoBalanceDraft}
+                onChange={(event) => setDemoBalanceDraft(event.target.value)}
+                className={cn(
+                  "mt-1 w-full rounded border bg-secondary px-2 py-2 text-xs font-mono text-foreground outline-none",
+                  !demoBalanceDraft || (Number.isFinite(demoBalanceParsed) && demoBalanceParsed > 0)
+                    ? "border-border"
+                    : "border-negative"
+                )}
+                placeholder="10000"
+                disabled={loadingDemoAccount || updateDemoBalanceMutation.isPending}
+              />
+            </div>
+            <button
+              onClick={handleSaveDemoBalance}
+              disabled={
+                loadingDemoAccount ||
+                updateDemoBalanceMutation.isPending ||
+                !Number.isFinite(demoBalanceParsed) ||
+                demoBalanceParsed <= 0 ||
+                !demoBalanceDirty
+              }
+              className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60"
+            >
+              Save Demo Balance
+            </button>
+          </div>
+          <div className="mt-2 text-xs font-mono text-muted-foreground">
+            Current saved balance: {formatUsd(demoBalanceCurrent)}
+            {demoAccountData?.demoAccount.updatedAt ? `  |  Updated: ${formatDateTime(demoAccountData.demoAccount.updatedAt)}` : ""}
+          </div>
+        </div>
+      ) : null}
 
       {strategyError ? (
         <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">
@@ -613,7 +1012,7 @@ export function AutomationPage() {
 
           <div className="grid grid-cols-2 gap-2 text-xs font-mono">
             <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Rules</div><div className="mt-1 text-foreground">{selectedStrategy?.rules.length ?? 0}</div></div>
-            <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Last Run</div><div className="mt-1 text-foreground">{formatDateTime(selectedStrategy?.lastRunAt)}</div></div>
+            <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Last Run</div><div className="mt-1 text-foreground">{formatDateTime(selectedStrategyLastRunAt)}</div></div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -640,9 +1039,10 @@ export function AutomationPage() {
           <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Structured Strategy Editor</div>
           <div className="flex gap-2">
             <button onClick={handleResetDraft} disabled={busy || !draftDirty || !selectedStrategy} className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary disabled:opacity-60">Reset</button>
-            <button onClick={handleSaveStrategy} disabled={busy || !draftDirty || !draft || !selectedStrategy} className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60">Save Strategy</button>
+            <button onClick={handleSaveStrategy} disabled={busy || !draftDirty || !draft || !selectedStrategy || draftHasErrors} className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60">Save Strategy</button>
           </div>
         </div>
+        {draftHasErrors ? <div className="text-xs font-mono text-negative">Fix inline validation errors to enable save.</div> : null}
 
         {!draft ? (
           <div className="text-sm text-muted-foreground">Select a strategy to edit.</div>
@@ -651,21 +1051,23 @@ export function AutomationPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
               <div>
                 <label className="text-muted-foreground">Name</label>
-                <input value={draft.name} onChange={(event) => updateDraft((prev) => ({ ...prev, name: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" />
+                <input value={draft.name} onChange={(event) => updateDraft((prev) => ({ ...prev, name: event.target.value }))} className={editorFieldClass(Boolean(draftValidation?.name))} />
+                {draftValidation?.name ? <div className={inlineErrorClass}>{draftValidation.name}</div> : null}
               </div>
               <div>
                 <label className="text-muted-foreground">Execution Mode</label>
-                <select value={draft.executionMode} onChange={(event) => updateDraft((prev) => ({ ...prev, executionMode: event.target.value as StrategyMode }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none">
+                <select value={draft.executionMode} onChange={(event) => updateDraft((prev) => ({ ...prev, executionMode: event.target.value as StrategyMode }))} className={editorFieldClass(false)}>
                   {MODE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </div>
               <div className="md:col-span-2">
                 <label className="text-muted-foreground">Description</label>
-                <textarea value={draft.description} onChange={(event) => updateDraft((prev) => ({ ...prev, description: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" rows={2} />
+                <textarea value={draft.description} onChange={(event) => updateDraft((prev) => ({ ...prev, description: event.target.value }))} className={editorFieldClass(false)} rows={2} />
               </div>
               <div>
                 <label className="text-muted-foreground">Schedule Interval</label>
-                <input value={draft.scheduleInterval} onChange={(event) => updateDraft((prev) => ({ ...prev, scheduleInterval: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" placeholder="15m" />
+                <input value={draft.scheduleInterval} onChange={(event) => updateDraft((prev) => ({ ...prev, scheduleInterval: event.target.value }))} className={editorFieldClass(Boolean(draftValidation?.scheduleInterval))} placeholder="15m" />
+                {draftValidation?.scheduleInterval ? <div className={inlineErrorClass}>{draftValidation.scheduleInterval}</div> : null}
               </div>
               <div className="flex items-end">
                 <label className="inline-flex items-center gap-2 text-foreground">
@@ -697,11 +1099,51 @@ export function AutomationPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-xs font-mono">
-              <div><label className="text-muted-foreground">Max Single %</label><input value={draft.guards.maxSingleAssetPct} onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxSingleAssetPct: event.target.value } }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" /></div>
-              <div><label className="text-muted-foreground">Min Stable %</label><input value={draft.guards.minStablecoinPct} onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minStablecoinPct: event.target.value } }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" /></div>
-              <div><label className="text-muted-foreground">Max Trades</label><input value={draft.guards.maxTradesPerCycle} onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxTradesPerCycle: event.target.value } }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" /></div>
-              <div><label className="text-muted-foreground">Min Notional</label><input value={draft.guards.minTradeNotional} onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minTradeNotional: event.target.value } }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" /></div>
-              <div><label className="text-muted-foreground">Cash Reserve %</label><input value={draft.guards.cashReservePct} onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, cashReservePct: event.target.value } }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none" /></div>
+              <div>
+                <label className="text-muted-foreground">Max Single %</label>
+                <input
+                  value={draft.guards.maxSingleAssetPct}
+                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxSingleAssetPct: event.target.value } }))}
+                  className={editorFieldClass(Boolean(draftValidation?.guards.maxSingleAssetPct))}
+                />
+                {draftValidation?.guards.maxSingleAssetPct ? <div className={inlineErrorClass}>{draftValidation.guards.maxSingleAssetPct}</div> : null}
+              </div>
+              <div>
+                <label className="text-muted-foreground">Min Stable %</label>
+                <input
+                  value={draft.guards.minStablecoinPct}
+                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minStablecoinPct: event.target.value } }))}
+                  className={editorFieldClass(Boolean(draftValidation?.guards.minStablecoinPct))}
+                />
+                {draftValidation?.guards.minStablecoinPct ? <div className={inlineErrorClass}>{draftValidation.guards.minStablecoinPct}</div> : null}
+              </div>
+              <div>
+                <label className="text-muted-foreground">Max Trades</label>
+                <input
+                  value={draft.guards.maxTradesPerCycle}
+                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxTradesPerCycle: event.target.value } }))}
+                  className={editorFieldClass(Boolean(draftValidation?.guards.maxTradesPerCycle))}
+                />
+                {draftValidation?.guards.maxTradesPerCycle ? <div className={inlineErrorClass}>{draftValidation.guards.maxTradesPerCycle}</div> : null}
+              </div>
+              <div>
+                <label className="text-muted-foreground">Min Notional</label>
+                <input
+                  value={draft.guards.minTradeNotional}
+                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minTradeNotional: event.target.value } }))}
+                  className={editorFieldClass(Boolean(draftValidation?.guards.minTradeNotional))}
+                />
+                {draftValidation?.guards.minTradeNotional ? <div className={inlineErrorClass}>{draftValidation.guards.minTradeNotional}</div> : null}
+              </div>
+              <div>
+                <label className="text-muted-foreground">Cash Reserve %</label>
+                <input
+                  value={draft.guards.cashReservePct}
+                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, cashReservePct: event.target.value } }))}
+                  className={editorFieldClass(Boolean(draftValidation?.guards.cashReservePct))}
+                />
+                {draftValidation?.guards.cashReservePct ? <div className={inlineErrorClass}>{draftValidation.guards.cashReservePct}</div> : null}
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -709,11 +1151,28 @@ export function AutomationPage() {
                 <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Base Allocation</div>
                 <button onClick={addAllocationRow} className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary">Add Row</button>
               </div>
+              {draftValidation?.baseAllocation ? <div className={inlineErrorClass}>{draftValidation.baseAllocation}</div> : null}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {draft.baseAllocationRows.map((row) => (
                   <div key={row.id} className="rounded border border-border bg-secondary/30 p-2 grid grid-cols-12 gap-2 items-end text-xs font-mono">
-                    <div className="col-span-5"><label className="text-muted-foreground">Symbol</label><input value={row.symbol} onChange={(event) => updateAllocationRow(row.id, { symbol: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
-                    <div className="col-span-5"><label className="text-muted-foreground">Percent</label><input value={row.percent} onChange={(event) => updateAllocationRow(row.id, { percent: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
+                    <div className="col-span-5">
+                      <label className="text-muted-foreground">Symbol</label>
+                      <input
+                        value={row.symbol}
+                        onChange={(event) => updateAllocationRow(row.id, { symbol: event.target.value })}
+                        className={editorFieldClass(Boolean(draftValidation?.baseAllocationRows[row.id]?.symbol), true)}
+                      />
+                      {draftValidation?.baseAllocationRows[row.id]?.symbol ? <div className={inlineErrorClass}>{draftValidation.baseAllocationRows[row.id]?.symbol}</div> : null}
+                    </div>
+                    <div className="col-span-5">
+                      <label className="text-muted-foreground">Percent</label>
+                      <input
+                        value={row.percent}
+                        onChange={(event) => updateAllocationRow(row.id, { percent: event.target.value })}
+                        className={editorFieldClass(Boolean(draftValidation?.baseAllocationRows[row.id]?.percent), true)}
+                      />
+                      {draftValidation?.baseAllocationRows[row.id]?.percent ? <div className={inlineErrorClass}>{draftValidation.baseAllocationRows[row.id]?.percent}</div> : null}
+                    </div>
                     <div className="col-span-2"><button onClick={() => removeAllocationRow(row.id)} disabled={draft.baseAllocationRows.length <= 1} className="w-full px-2 py-1.5 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary disabled:opacity-50">Del</button></div>
                   </div>
                 ))}
@@ -722,7 +1181,13 @@ export function AutomationPage() {
 
             <div>
               <label className="text-xs font-mono text-muted-foreground">Disabled Assets (comma separated)</label>
-              <input value={draft.disabledAssetsCsv} onChange={(event) => updateDraft((prev) => ({ ...prev, disabledAssetsCsv: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none text-xs font-mono" placeholder="DOGE, SHIB" />
+              <input
+                value={draft.disabledAssetsCsv}
+                onChange={(event) => updateDraft((prev) => ({ ...prev, disabledAssetsCsv: event.target.value }))}
+                className={cn(editorFieldClass(Boolean(draftValidation?.disabledAssetsCsv)), "text-xs font-mono")}
+                placeholder="DOGE, SHIB"
+              />
+              {draftValidation?.disabledAssetsCsv ? <div className={inlineErrorClass}>{draftValidation.disabledAssetsCsv}</div> : null}
             </div>
 
             <div className="space-y-2">
@@ -735,7 +1200,10 @@ export function AutomationPage() {
                 <div className="text-sm text-muted-foreground">No rules defined.</div>
               ) : (
                 <div className="space-y-2">
-                  {draft.rules.map((rule, index) => (
+                  {draft.rules.map((rule, index) => {
+                    const ruleErrors = draftValidation?.rules[String(index)];
+
+                    return (
                     <div key={rule.id} className="rounded border border-border bg-secondary/30 p-3 space-y-2 text-xs font-mono">
                       <div className="flex items-center justify-between">
                         <div className="text-foreground">Rule {index + 1}</div>
@@ -743,28 +1211,57 @@ export function AutomationPage() {
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                        <div><label className="text-muted-foreground">ID</label><input value={rule.id} onChange={(event) => updateRule(rule.id, { id: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
-                        <div><label className="text-muted-foreground">Name</label><input value={rule.name} onChange={(event) => updateRule(rule.id, { name: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
-                        <div><label className="text-muted-foreground">Priority</label><input value={rule.priority} onChange={(event) => updateRule(rule.id, { priority: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
+                        <div>
+                          <label className="text-muted-foreground">ID</label>
+                          <input value={rule.id} onChange={(event) => updateRule(rule.id, { id: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.id), true)} />
+                          {ruleErrors?.id ? <div className={inlineErrorClass}>{ruleErrors.id}</div> : null}
+                        </div>
+                        <div><label className="text-muted-foreground">Name</label><input value={rule.name} onChange={(event) => updateRule(rule.id, { name: event.target.value })} className={editorFieldClass(false, true)} /></div>
+                        <div>
+                          <label className="text-muted-foreground">Priority</label>
+                          <input value={rule.priority} onChange={(event) => updateRule(rule.id, { priority: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.priority), true)} />
+                          {ruleErrors?.priority ? <div className={inlineErrorClass}>{ruleErrors.priority}</div> : null}
+                        </div>
                         <div className="md:col-span-2 flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(rule.id, { enabled: event.target.checked })} /> Enabled</label></div>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                        <div><label className="text-muted-foreground">Indicator</label><select value={rule.conditionIndicator} onChange={(event) => updateRule(rule.id, { conditionIndicator: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none">{INDICATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
-                        <div><label className="text-muted-foreground">Operator</label><select value={rule.conditionOperator} onChange={(event) => updateRule(rule.id, { conditionOperator: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none">{OPERATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
-                        <div><label className="text-muted-foreground">Value</label><input value={rule.conditionValue} onChange={(event) => updateRule(rule.id, { conditionValue: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
-                        <div><label className="text-muted-foreground">Condition Asset</label><input value={rule.conditionAsset} onChange={(event) => updateRule(rule.id, { conditionAsset: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
+                        <div><label className="text-muted-foreground">Indicator</label><select value={rule.conditionIndicator} onChange={(event) => updateRule(rule.id, { conditionIndicator: event.target.value })} className={editorFieldClass(false, true)}>{INDICATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
+                        <div><label className="text-muted-foreground">Operator</label><select value={rule.conditionOperator} onChange={(event) => updateRule(rule.id, { conditionOperator: event.target.value })} className={editorFieldClass(false, true)}>{OPERATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
+                        <div>
+                          <label className="text-muted-foreground">Value</label>
+                          <input value={rule.conditionValue} onChange={(event) => updateRule(rule.id, { conditionValue: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.conditionValue), true)} />
+                          {ruleErrors?.conditionValue ? <div className={inlineErrorClass}>{ruleErrors.conditionValue}</div> : null}
+                        </div>
+                        <div><label className="text-muted-foreground">Condition Asset</label><input value={rule.conditionAsset} onChange={(event) => updateRule(rule.id, { conditionAsset: event.target.value })} className={editorFieldClass(false, true)} /></div>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                        <div><label className="text-muted-foreground">Action</label><select value={rule.actionType} onChange={(event) => updateRule(rule.id, { actionType: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none">{ACTION_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
-                        <div><label className="text-muted-foreground">Percent</label><input value={rule.actionPercent} onChange={(event) => updateRule(rule.id, { actionPercent: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
-                        <div><label className="text-muted-foreground">Action Asset</label><input value={rule.actionAsset} onChange={(event) => updateRule(rule.id, { actionAsset: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
-                        <div><label className="text-muted-foreground">From</label><input value={rule.actionFrom} onChange={(event) => updateRule(rule.id, { actionFrom: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
-                        <div><label className="text-muted-foreground">To</label><input value={rule.actionTo} onChange={(event) => updateRule(rule.id, { actionTo: event.target.value })} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-1.5 text-foreground outline-none" /></div>
+                        <div><label className="text-muted-foreground">Action</label><select value={rule.actionType} onChange={(event) => updateRule(rule.id, { actionType: event.target.value })} className={editorFieldClass(false, true)}>{ACTION_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
+                        <div>
+                          <label className="text-muted-foreground">Percent</label>
+                          <input value={rule.actionPercent} onChange={(event) => updateRule(rule.id, { actionPercent: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionPercent), true)} />
+                          {ruleErrors?.actionPercent ? <div className={inlineErrorClass}>{ruleErrors.actionPercent}</div> : null}
+                        </div>
+                        <div>
+                          <label className="text-muted-foreground">Action Asset</label>
+                          <input value={rule.actionAsset} onChange={(event) => updateRule(rule.id, { actionAsset: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionAsset), true)} />
+                          {ruleErrors?.actionAsset ? <div className={inlineErrorClass}>{ruleErrors.actionAsset}</div> : null}
+                        </div>
+                        <div>
+                          <label className="text-muted-foreground">From</label>
+                          <input value={rule.actionFrom} onChange={(event) => updateRule(rule.id, { actionFrom: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionFrom), true)} />
+                          {ruleErrors?.actionFrom ? <div className={inlineErrorClass}>{ruleErrors.actionFrom}</div> : null}
+                        </div>
+                        <div>
+                          <label className="text-muted-foreground">To</label>
+                          <input value={rule.actionTo} onChange={(event) => updateRule(rule.id, { actionTo: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionTo), true)} />
+                          {ruleErrors?.actionTo ? <div className={inlineErrorClass}>{ruleErrors.actionTo}</div> : null}
+                        </div>
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               )}
             </div>
@@ -778,16 +1275,16 @@ export function AutomationPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-border">
-                {["Started", "Strategy", "Status", "Trigger", "Completed", "Duration", "Warn"].map((heading) => (
+                {["Started", "Strategy", "Account", "Status", "Trigger", "Completed", "Duration", "Warn"].map((heading) => (
                   <th key={heading} className="py-3 px-4 text-[10px] font-mono uppercase tracking-wider text-muted-foreground text-right first:text-left">{heading}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {loadingRuns ? (
-                <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-muted-foreground">Loading runs...</td></tr>
+                <tr><td colSpan={8} className="px-4 py-6 text-center text-sm text-muted-foreground">Loading runs...</td></tr>
               ) : runs.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-muted-foreground">No runs yet.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-6 text-center text-sm text-muted-foreground">No runs yet.</td></tr>
               ) : (
                 runs.slice(0, 12).map((run) => (
                   <tr
@@ -797,6 +1294,7 @@ export function AutomationPage() {
                   >
                     <td className="py-3 px-4 text-left text-xs font-mono text-muted-foreground">{formatDateTime(run.startedAt)}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{run.strategyId}</td>
+                    <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{run.accountType}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono"><span className={run.status === "completed" ? "text-positive" : run.status === "failed" ? "text-negative" : "text-muted-foreground"}>{run.status}</span></td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{run.trigger}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-muted-foreground">{formatDateTime(run.completedAt)}</td>
@@ -817,9 +1315,10 @@ export function AutomationPage() {
               <div className="text-sm text-muted-foreground">Select a run to inspect.</div>
             ) : (
               <>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs font-mono">
                   <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Status</div><div className="mt-1 text-foreground">{selectedRun.status}</div></div>
                   <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Mode</div><div className="mt-1 text-foreground">{selectedRun.mode}</div></div>
+                  <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Account</div><div className="mt-1 text-foreground">{selectedRun.accountType}</div></div>
                   <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Trigger</div><div className="mt-1 text-foreground">{selectedRun.trigger}</div></div>
                   <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Duration</div><div className="mt-1 text-foreground">{formatDuration(selectedRun.startedAt, selectedRun.completedAt)}</div></div>
                 </div>

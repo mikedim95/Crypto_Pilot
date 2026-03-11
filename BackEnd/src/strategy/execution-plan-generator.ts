@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { AllocationMap, ExecutionPlan, RebalancePlan, StrategyMode } from "./types.js";
+import { AllocationMap, ExecutionPlan, PortfolioAccountType, RebalancePlan, StrategyMode } from "./types.js";
 
 interface ExecutionPlanGeneratorInput {
   strategyId: string;
+  accountType: PortfolioAccountType;
   mode: StrategyMode;
   currentAllocation: AllocationMap;
   targetAllocation: AllocationMap;
@@ -19,6 +20,7 @@ export function generateExecutionPlan(input: ExecutionPlanGeneratorInput): Execu
     id: randomUUID(),
     strategyId: input.strategyId,
     timestamp,
+    accountType: input.accountType,
     mode: input.mode,
     currentAllocation: input.currentAllocation,
     adjustedTargetAllocation: input.targetAllocation,

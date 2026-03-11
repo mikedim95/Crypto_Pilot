@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { backendApi } from "@/lib/api";
+import type { PortfolioAccountType } from "@/types/api";
 
 export function useDashboardData() {
   return useQuery({
@@ -28,6 +29,16 @@ export function useBinanceConnection() {
     staleTime: 5_000,
     refetchInterval: 15_000,
     retry: false,
+  });
+}
+
+export function useDemoAccountSettings() {
+  return useQuery({
+    queryKey: ["demo-account-settings"],
+    queryFn: backendApi.getDemoAccountSettings,
+    staleTime: 5_000,
+    refetchInterval: 20_000,
+    retry: 1,
   });
 }
 
@@ -61,10 +72,10 @@ export function useStrategies() {
   });
 }
 
-export function useStrategyRuns() {
+export function useStrategyRuns(accountType: PortfolioAccountType = "real") {
   return useQuery({
-    queryKey: ["strategy-runs"],
-    queryFn: backendApi.getStrategyRuns,
+    queryKey: ["strategy-runs", accountType],
+    queryFn: () => backendApi.getStrategyRuns(accountType),
     staleTime: 5_000,
     refetchInterval: 20_000,
     retry: 1,
@@ -92,10 +103,10 @@ export function useBacktests() {
   });
 }
 
-export function useStrategyState(strategyId: string | undefined) {
+export function useStrategyState(strategyId: string | undefined, accountType: PortfolioAccountType = "real") {
   return useQuery({
-    queryKey: ["strategy-state", strategyId],
-    queryFn: () => backendApi.getStrategyState(strategyId ?? ""),
+    queryKey: ["strategy-state", strategyId, accountType],
+    queryFn: () => backendApi.getStrategyState(strategyId ?? "", accountType),
     enabled: Boolean(strategyId),
     staleTime: 5_000,
     refetchInterval: 20_000,
@@ -103,10 +114,10 @@ export function useStrategyState(strategyId: string | undefined) {
   });
 }
 
-export function useStrategyExecutionPlan(strategyId: string | undefined) {
+export function useStrategyExecutionPlan(strategyId: string | undefined, accountType: PortfolioAccountType = "real") {
   return useQuery({
-    queryKey: ["strategy-execution-plan", strategyId],
-    queryFn: () => backendApi.getStrategyExecutionPlan(strategyId ?? ""),
+    queryKey: ["strategy-execution-plan", strategyId, accountType],
+    queryFn: () => backendApi.getStrategyExecutionPlan(strategyId ?? "", accountType),
     enabled: Boolean(strategyId),
     staleTime: 5_000,
     refetchInterval: 20_000,

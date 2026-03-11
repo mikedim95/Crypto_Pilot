@@ -5,12 +5,14 @@ import type {
   BacktestTimelineResponse,
   BacktestsResponse,
   ConnectionStatus,
+  DemoAccountSettingsResponse,
   CreateBacktestResponse,
   DashboardResponse,
   ExecutionPlanResponse,
   MiningOverviewResponse,
   NicehashOverviewResponse,
   OrdersResponse,
+  PortfolioAccountType,
   StrategiesResponse,
   StrategyResponse,
   StrategyRunResponse,
@@ -25,6 +27,20 @@ interface ConnectRequest {
   apiKey: string;
   apiSecret: string;
   testnet: boolean;
+}
+
+function withQuery(path: string, query?: Record<string, string | undefined>): string {
+  if (!query) return path;
+
+  const params = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (!value) return;
+    params.set(key, value);
+  });
+
+  const qs = params.toString();
+  if (!qs) return path;
+  return `${path}?${qs}`;
 }
 
 function parseJsonSafely(text: string): unknown {
@@ -78,6 +94,13 @@ export const backendApi = {
     apiRequest<ConnectionStatus>("/api/binance/connection", {
       method: "DELETE",
     }),
+  getDemoAccountSettings: () =>
+    apiRequest<DemoAccountSettingsResponse>("/api/strategy-settings/demo-account"),
+  updateDemoAccountSettings: (balance: number) =>
+    apiRequest<DemoAccountSettingsResponse>("/api/strategy-settings/demo-account", {
+      method: "PUT",
+      body: JSON.stringify({ balance }),
+    }),
 
   getStrategies: () => apiRequest<StrategiesResponse>("/api/strategies"),
   getStrategy: (strategyId: string) => apiRequest<StrategyResponse>(`/api/strategies/${strategyId}`),
@@ -96,14 +119,14 @@ export const backendApi = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
-  runStrategyNow: (strategyId: string) =>
-    apiRequest<StrategyRunResponse>(`/api/strategies/${strategyId}/run-now`, {
+  runStrategyNow: (strategyId: string, accountType: PortfolioAccountType = "real") =>
+    apiRequest<StrategyRunResponse>(withQuery(`/api/strategies/${strategyId}/run-now`, { accountType }), {
       method: "POST",
     }),
-  getStrategyState: (strategyId: string) =>
-    apiRequest<StrategyStateResponse>(`/api/strategies/${strategyId}/state`),
-  getStrategyExecutionPlan: (strategyId: string) =>
-    apiRequest<ExecutionPlanResponse>(`/api/strategies/${strategyId}/execution-plan`),
+  getStrategyState: (strategyId: string, accountType: PortfolioAccountType = "real") =>
+    apiRequest<StrategyStateResponse>(withQuery(`/api/strategies/${strategyId}/state`, { accountType })),
+  getStrategyExecutionPlan: (strategyId: string, accountType: PortfolioAccountType = "real") =>
+    apiRequest<ExecutionPlanResponse>(withQuery(`/api/strategies/${strategyId}/execution-plan`, { accountType })),
   enableStrategy: (strategyId: string) =>
     apiRequest<StrategyResponse>(`/api/strategies/${strategyId}/enable`, {
       method: "POST",
@@ -117,7 +140,8 @@ export const backendApi = {
       method: "POST",
       body: JSON.stringify({ scheduleInterval }),
     }),
-  getStrategyRuns: () => apiRequest<StrategyRunsResponse>("/api/strategy-runs"),
+  getStrategyRuns: (accountType: PortfolioAccountType = "real") =>
+    apiRequest<StrategyRunsResponse>(withQuery("/api/strategy-runs", { accountType })),
   getStrategyRun: (runId: string) => apiRequest<StrategyRunResponse>(`/api/strategy-runs/${runId}`),
 
   createBacktest: (body: BacktestCreateRequest) =>

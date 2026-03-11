@@ -7,6 +7,7 @@ import { mergeStrategyUpdate, validateStrategyDsl } from "./strategy-dsl-parser.
 import { StrategyRepository } from "./strategy-repository.js";
 import { StrategyRunner } from "./strategy-runner.js";
 import { parseScheduleIntervalToMs } from "./allocation-utils.js";
+import { PortfolioAccountType } from "./types.js";
 
 const scheduleSchema = z.object({
   scheduleInterval: z.string().regex(/^\d+(s|m|h|d)$/i),
@@ -27,6 +28,11 @@ const backtestRequestSchema = z.object({
   slippagePct: z.number().finite().min(0).max(1).default(0.001),
 });
 
+const accountTypeSchema = z.enum(["real", "demo"]);
+const demoAccountBalanceSchema = z.object({
+  balance: z.number().finite().positive(),
+});
+
 interface StrategyApiDeps {
   repository: StrategyRepository;
   runner: StrategyRunner;
@@ -37,8 +43,36 @@ function sendNotFound(res: express.Response, entity: string, id: string): void {
   res.status(404).json({ message: `${entity} ${id} not found.` });
 }
 
+function parseAccountType(req: express.Request): PortfolioAccountType {
+  const queryValue = typeof req.query?.accountType === "string" ? req.query.accountType : undefined;
+  const bodyValue =
+    req.body && typeof req.body === "object" && typeof (req.body as Record<string, unknown>).accountType === "string"
+      ? String((req.body as Record<string, unknown>).accountType)
+      : undefined;
+
+  const rawValue = (queryValue ?? bodyValue ?? "real").trim().toLowerCase();
+  const parsed = accountTypeSchema.safeParse(rawValue);
+  return parsed.success ? parsed.data : "real";
+}
+
 export function createStrategyRouter(deps: StrategyApiDeps): Router {
   const router = Router();
+
+  router.get("/strategy-settings/demo-account", async (_req, res) => {
+    const demoAccount = await deps.repository.getDemoAccountSettings();
+    res.json({ demoAccount });
+  });
+
+  router.put("/strategy-settings/demo-account", async (req, res) => {
+    const parsed = demoAccountBalanceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid demo account payload.", errors: parsed.error.issues });
+      return;
+    }
+
+    const demoAccount = await deps.repository.setDemoAccountBalance(parsed.data.balance);
+    res.json({ demoAccount });
+  });
 
   router.get("/strategies", async (_req, res) => {
     const strategies = await deps.repository.listStrategies();
@@ -101,7 +135,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
 
   router.post("/strategies/:id/run", async (req, res) => {
     try {
-      const run = await deps.runner.runStrategy(req.params.id, "api");
+      const run = await deps.runner.runStrategy(req.params.id, "api", parseAccountType(req));
       res.json({ run });
     } catch (error) {
       res.status(400).json({ message: error instanceof Error ? error.message : "Unable to run strategy." });
@@ -110,7 +144,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
 
   router.post("/strategies/:id/run-now", async (req, res) => {
     try {
-      const run = await deps.runner.runStrategy(req.params.id, "api");
+      const run = await deps.runner.runStrategy(req.params.id, "api", parseAccountType(req));
       res.json({ run });
     } catch (error) {
       res.status(400).json({ message: error instanceof Error ? error.message : "Unable to run strategy." });
@@ -119,7 +153,8 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
 
   router.get("/strategies/:id/state", async (req, res) => {
     try {
-      const state = await deps.runner.evaluateStrategyState(req.params.id);
+      const accountType = parseAccountType(req);
+      const state = await deps.runner.evaluateStrategyState(req.params.id, accountType);
       if (!state) {
         sendNotFound(res, "Strategy", req.params.id);
         return;
@@ -127,6 +162,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
 
       res.json({
         strategyId: state.strategy.id,
+        accountType: state.accountType,
         currentAllocation: state.evaluation.currentAllocation,
         adjustedTargetAllocation: state.evaluation.adjustedTargetAllocation,
         portfolio: state.portfolio,
@@ -141,7 +177,8 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
   });
 
   router.get("/strategies/:id/execution-plan", async (req, res) => {
-    const plan = await deps.repository.getLatestExecutionPlanByStrategy(req.params.id);
+    const accountType = parseAccountType(req);
+    const plan = await deps.repository.getLatestExecutionPlanByStrategy(req.params.id, accountType);
     if (!plan) {
       sendNotFound(res, "Execution plan for strategy", req.params.id);
       return;
@@ -192,8 +229,9 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
     res.json({ strategy });
   });
 
-  router.get("/strategy-runs", async (_req, res) => {
-    const runs = await deps.repository.listStrategyRuns();
+  router.get("/strategy-runs", async (req, res) => {
+    const accountType = parseAccountType(req);
+    const runs = await deps.repository.listStrategyRuns(200, accountType);
     res.json({ runs });
   });
 

@@ -41,12 +41,12 @@ export class StrategyScheduler {
       const dueStrategies = await this.repository.listDueStrategies(nowIso);
 
       for (const strategy of dueStrategies) {
-        if (this.runner.isRunning(strategy.id)) {
+        if (this.runner.isRunning(strategy.id, "real")) {
           continue;
         }
 
         try {
-          await this.runner.runStrategy(strategy.id, "schedule");
+          await this.runner.runStrategy(strategy.id, "schedule", "real");
         } catch (error) {
           console.error(
             `[strategy-scheduler] Strategy ${strategy.id} failed:`,

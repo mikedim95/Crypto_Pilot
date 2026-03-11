@@ -28,6 +28,9 @@ export type StrategyActionType = (typeof STRATEGY_ACTION_TYPES)[number];
 export const STRATEGY_MODES = ["manual", "semi_auto", "auto"] as const;
 export type StrategyMode = (typeof STRATEGY_MODES)[number];
 
+export const PORTFOLIO_ACCOUNT_TYPES = ["real", "demo"] as const;
+export type PortfolioAccountType = (typeof PORTFOLIO_ACCOUNT_TYPES)[number];
+
 export const STRATEGY_RUN_STATUSES = ["pending", "running", "completed", "failed", "skipped"] as const;
 export type StrategyRunStatus = (typeof STRATEGY_RUN_STATUSES)[number];
 
@@ -73,6 +76,11 @@ export interface StrategyMetadata {
   expectedTurnover?: "low" | "medium" | "high";
   stablecoinExposure?: "low" | "medium" | "high";
   tags?: string[];
+}
+
+export interface DemoAccountSettings {
+  balance: number;
+  updatedAt: string;
 }
 
 export interface StrategyConfig {
@@ -172,6 +180,7 @@ export interface ExecutionPlan {
   id: string;
   strategyId: string;
   timestamp: string;
+  accountType: PortfolioAccountType;
   mode: StrategyMode;
   currentAllocation: AllocationMap;
   adjustedTargetAllocation: AllocationMap;
@@ -200,6 +209,7 @@ export interface StrategyRun {
   startedAt: string;
   completedAt?: string;
   status: StrategyRunStatus;
+  accountType: PortfolioAccountType;
   mode: StrategyMode;
   trigger: "manual" | "schedule" | "api";
   inputSnapshot?: {
@@ -290,4 +300,5 @@ export interface StrategyStoreData {
   executionPlans: ExecutionPlan[];
   backtestRuns: BacktestRun[];
   backtestSteps: BacktestStep[];
+  demoAccount: DemoAccountSettings;
 }

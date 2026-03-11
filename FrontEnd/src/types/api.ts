@@ -126,8 +126,14 @@ export type StrategyActionType =
   | "shift"
   | "increase_stablecoin_exposure"
   | "reduce_altcoin_exposure";
+export type PortfolioAccountType = "real" | "demo";
 export type StrategyRunStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 export type BacktestRunStatus = "pending" | "running" | "completed" | "failed";
+
+export interface DemoAccountSettings {
+  balance: number;
+  updatedAt: string;
+}
 
 export type AllocationMap = Record<string, number>;
 
@@ -201,6 +207,7 @@ export interface ExecutionPlan {
   id: string;
   strategyId: string;
   timestamp: string;
+  accountType: PortfolioAccountType;
   mode: StrategyMode;
   currentAllocation: AllocationMap;
   adjustedTargetAllocation: AllocationMap;
@@ -217,6 +224,7 @@ export interface StrategyRun {
   startedAt: string;
   completedAt?: string;
   status: StrategyRunStatus;
+  accountType: PortfolioAccountType;
   mode: StrategyMode;
   trigger: "manual" | "schedule" | "api";
   inputSnapshot?: {
@@ -264,6 +272,7 @@ export interface RuleEvaluationTrace {
 
 export interface StrategyStateResponse {
   strategyId: string;
+  accountType: PortfolioAccountType;
   currentAllocation: AllocationMap;
   adjustedTargetAllocation: AllocationMap;
   portfolio: PortfolioState;
@@ -335,6 +344,10 @@ export interface StrategyValidationResponse {
   valid: boolean;
   strategy?: StrategyConfig;
   errors?: string[];
+}
+
+export interface DemoAccountSettingsResponse {
+  demoAccount: DemoAccountSettings;
 }
 
 export interface BacktestsResponse {
