@@ -8,6 +8,7 @@ import { RebalancePage } from "@/pages/RebalancePage";
 import { AutomationPage } from "@/pages/AutomationPage";
 import { AsicMinersPage } from "@/pages/AsicMinersPage";
 import { NicehashPage } from "@/pages/NicehashPage";
+import type { PortfolioAccountType } from "@/types/api";
 
 const inactivePageMeta: Record<string, { title: string; description: string }> = {
   dashboard: {
@@ -30,6 +31,7 @@ const inactivePageMeta: Record<string, { title: string; description: string }> =
 
 const Index = () => {
   const [currentPage, setCurrentPage] = useState("portfolio");
+  const [accountType, setAccountType] = useState<PortfolioAccountType>("demo");
 
   const renderPage = () => {
     switch (currentPage) {
@@ -40,7 +42,7 @@ const Index = () => {
       case "rebalance":
         return <RebalancePage />;
       case "automation":
-        return <AutomationPage />;
+        return <AutomationPage accountType={accountType} />;
       case "asic-miners":
         return <AsicMinersPage />;
       case "nicehash":
@@ -58,11 +60,15 @@ const Index = () => {
   };
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div data-account-mode={accountType} className="app-shell flex h-screen bg-background overflow-hidden">
       <AppSidebar currentPage={currentPage} onNavigate={setCurrentPage} />
       <div className="flex-1 flex flex-col min-w-0">
-        <TopBar />
-        <main className="flex-1 overflow-y-auto">{renderPage()}</main>
+        <TopBar accountType={accountType} onAccountTypeChange={setAccountType} />
+        <main className="flex-1 overflow-y-auto">
+          <div key={currentPage} className="page-enter">
+            {renderPage()}
+          </div>
+        </main>
       </div>
     </div>
   );

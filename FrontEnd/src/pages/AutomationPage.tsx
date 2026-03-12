@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Pencil } from "lucide-react";
 import { backendApi } from "@/lib/api";
-import { useBacktests, useDemoAccountSettings, useStrategies, useStrategyRunDetails, useStrategyRuns } from "@/hooks/useTradingData";
+import { useBacktests, useStrategies, useStrategyRunDetails, useStrategyRuns } from "@/hooks/useTradingData";
 import type {
   BacktestCreateRequest,
   PortfolioAccountType,
@@ -12,6 +11,10 @@ import type {
 } from "@/types/api";
 import { SpinnerValue } from "@/components/SpinnerValue";
 import { cn } from "@/lib/utils";
+
+interface AutomationPageProps {
+  accountType: PortfolioAccountType;
+}
 
 interface DraftAllocationRow {
   id: string;
@@ -513,27 +516,6 @@ function formatDateTime(value: string | undefined): string {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return "--";
   return parsed.toLocaleString();
-}
-
-function formatUsd(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
-  return value.toLocaleString("en-US", { style: "currency", currency: "USD" });
-}
-
-function formatUsdToken(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "USD$--";
-  return `USD$${value.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function formatAmountNumber(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
-  return value.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
 }
 
 function formatDuration(startedAt: string | undefined, completedAt: string | undefined): string {
@@ -1087,15 +1069,12 @@ function createUsableStrategyDraft(baseStrategies: StrategyConfig[]): StrategyDr
   }, selectedStrategies);
 }
 
-export function AutomationPage() {
+export function AutomationPage({ accountType }: AutomationPageProps) {
   const queryClient = useQueryClient();
-  const [accountType, setAccountType] = useState<PortfolioAccountType>("real");
-  const [isDemoBalanceModalOpen, setIsDemoBalanceModalOpen] = useState(false);
   const [isEditorModalOpen, setIsEditorModalOpen] = useState(false);
   const [isRunDetailsModalOpen, setIsRunDetailsModalOpen] = useState(false);
 
   const { data: strategyData, isPending: loadingStrategies, error: strategyError } = useStrategies();
-  const { data: demoAccountData, isPending: loadingDemoAccount } = useDemoAccountSettings();
   const { data: runData, isPending: loadingRuns } = useStrategyRuns(accountType);
   const { data: backtestData, isPending: loadingBacktests } = useBacktests();
 
@@ -1108,7 +1087,6 @@ export function AutomationPage() {
 
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [demoBalanceDraft, setDemoBalanceDraft] = useState("");
 
   const [draft, setDraft] = useState<StrategyDraft | null>(null);
   const [draftStrategyId, setDraftStrategyId] = useState("");
@@ -1155,19 +1133,6 @@ export function AutomationPage() {
       setSelectedRunId(runs[0].id);
     }
   }, [selectedRunId, runs]);
-
-  useEffect(() => {
-    const balance = demoAccountData?.demoAccount.balance;
-    if (typeof balance === "number" && Number.isFinite(balance)) {
-      setDemoBalanceDraft(String(balance));
-    }
-  }, [demoAccountData?.demoAccount.balance]);
-
-  useEffect(() => {
-    if (accountType !== "demo") {
-      setIsDemoBalanceModalOpen(false);
-    }
-  }, [accountType]);
 
   const selectedStrategy = useMemo(
     () => usableStrategies.find((strategy) => strategy.id === selectedStrategyId) ?? null,
@@ -1349,33 +1314,13 @@ export function AutomationPage() {
     },
   });
 
-  const updateDemoBalanceMutation = useMutation({
-    mutationFn: (balance: number) => backendApi.updateDemoAccountSettings(balance),
-    onSuccess: async (result) => {
-      setErrorMessage("");
-      setMessage(`Demo balance updated to ${formatUsd(result.demoAccount.balance)}.`);
-      setDemoBalanceDraft(String(result.demoAccount.balance));
-      setIsDemoBalanceModalOpen(false);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["demo-account-settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId, "demo"] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId, "demo"] }),
-      ]);
-    },
-    onError: (error) => {
-      setMessage("");
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update demo balance.");
-    },
-  });
-
   const busy =
     runNowMutation.isPending ||
     toggleMutation.isPending ||
     saveStrategyMutation.isPending ||
     createStrategyMutation.isPending ||
     deleteStrategyMutation.isPending ||
-    backtestMutation.isPending ||
-    updateDemoBalanceMutation.isPending;
+    backtestMutation.isPending;
 
   const draftValidation = useMemo(() => (draft ? validateDraft(draft) : null), [draft]);
   const draftHasErrors = draftValidation ? hasDraftValidationErrors(draftValidation) : false;
@@ -1577,17 +1522,6 @@ export function AutomationPage() {
     });
   };
 
-  const handleSaveDemoBalance = (): void => {
-    const parsed = Number(demoBalanceDraft);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      setMessage("");
-      setErrorMessage("Demo balance must be a positive number.");
-      return;
-    }
-
-    updateDemoBalanceMutation.mutate(parsed);
-  };
-
   const openStrategyEditor = (strategyId: string): void => {
     setEditorMode("edit");
     setShowCreateAdvancedOptions(true);
@@ -1619,14 +1553,6 @@ export function AutomationPage() {
   };
 
   const runIndicators = selectedRun?.inputSnapshot?.marketSignals.indicators ?? {};
-  const demoBalanceCurrent = demoAccountData?.demoAccount.balance;
-  const demoBalanceParsed = Number(demoBalanceDraft);
-  const demoBalanceDirty =
-    typeof demoBalanceCurrent === "number" &&
-    Number.isFinite(demoBalanceCurrent) &&
-    Number.isFinite(demoBalanceParsed) &&
-    demoBalanceParsed > 0 &&
-    Math.abs(demoBalanceParsed - demoBalanceCurrent) > 0.000001;
 
   return (
     <div className="p-6 space-y-6">
@@ -1637,54 +1563,13 @@ export function AutomationPage() {
             Structured strategy editor, run detail explorer, and backtesting.
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            Active account:{" "}
+            Global account mode:{" "}
             <span className="font-mono text-foreground">
-              {accountType === "demo" ? "Demo (uses live market data)" : "Real Money"}
+              {accountType === "demo" ? "Dummy (uses live market data)" : "Real Money"}
             </span>
           </p>
         </div>
-
-        <div className="inline-flex rounded-md border border-border overflow-hidden">
-          <button
-            onClick={() => setAccountType("real")}
-            className={cn(
-              "px-3 py-2 text-xs font-mono transition-colors",
-              accountType === "real"
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-muted-foreground hover:text-foreground"
-            )}
-          >
-            Real Money
-          </button>
-          <button
-            onClick={() => setAccountType("demo")}
-            className={cn(
-              "px-3 py-2 text-xs font-mono transition-colors border-l border-border",
-              accountType === "demo"
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-muted-foreground hover:text-foreground"
-            )}
-          >
-            Demo Account
-          </button>
-        </div>
       </div>
-
-      {accountType === "demo" ? (
-        <div className="flex justify-center">
-          <div className="relative px-6 py-1 text-center">
-            <button
-              onClick={() => setIsDemoBalanceModalOpen(true)}
-              className="absolute -right-2 -top-1 inline-flex h-6 w-6 items-center justify-center rounded-md border border-border bg-secondary text-muted-foreground hover:text-foreground"
-              aria-label="Edit demo balance"
-              disabled={loadingDemoAccount}
-            >
-              <Pencil size={12} />
-            </button>
-            <div className="text-lg font-mono text-muted-foreground">{formatAmountNumber(demoBalanceCurrent)}</div>
-          </div>
-        </div>
-      ) : null}
 
       {strategyError ? (
         <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">
@@ -1865,23 +1750,23 @@ export function AutomationPage() {
               </div>
             </div>
 
-            {editorMode === "create" ? (
-              <div className="rounded border border-border bg-secondary/20 p-3 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Advanced Options</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Keep defaults or expand to customize strategy behavior.</div>
-                </div>
-                <button
-                  onClick={() => setShowCreateAdvancedOptions((previous) => !previous)}
-                  className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary"
-                >
-                  {showCreateAdvancedOptions ? "Hide Advanced" : "Show Advanced"}
-                </button>
-              </div>
-            ) : null}
-
             <div className="rounded border border-border bg-secondary/20 p-3 space-y-3">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Composition</div>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Composition</div>
+                  {editorMode === "create" ? (
+                    <div className="mt-1 text-xs text-muted-foreground">Keep defaults or expand to customize strategy behavior.</div>
+                  ) : null}
+                </div>
+                {editorMode === "create" ? (
+                  <button
+                    onClick={() => setShowCreateAdvancedOptions((previous) => !previous)}
+                    className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary transition-all duration-300 hover:-translate-y-0.5"
+                  >
+                    {showCreateAdvancedOptions ? "Hide Advanced" : "Show Advanced"}
+                  </button>
+                ) : null}
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
                 <div>
                   <label className="text-muted-foreground">Composition Mode</label>
@@ -1957,8 +1842,13 @@ export function AutomationPage() {
                 </div>
               </div>
 
-              {showAdvancedOptions ? (
-                <>
+              <div
+                className={cn(
+                  "overflow-hidden transition-all duration-500 ease-out",
+                  showAdvancedOptions ? "max-h-[5000px] opacity-100" : "max-h-0 opacity-0"
+                )}
+              >
+                <div className="space-y-3 pt-1">
                   <div className="flex items-center gap-2 text-xs font-mono text-foreground">
                     <input
                       type="checkbox"
@@ -2218,12 +2108,16 @@ export function AutomationPage() {
                       ) : null}
                     </div>
                   </div>
-                </>
-              ) : null}
-            </div>
+                </div>
+              </div>
 
-            {showAdvancedOptions ? (
-              <>
+            <div
+              className={cn(
+                "overflow-hidden transition-all duration-500 ease-out",
+                showAdvancedOptions ? "max-h-[2000px] opacity-100" : "max-h-0 opacity-0"
+              )}
+            >
+              <div className="space-y-3">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
                   <div>
                     <label className="text-muted-foreground">Risk Level</label>
@@ -2297,8 +2191,9 @@ export function AutomationPage() {
                     {draftValidation?.guards.cashReservePct ? <div className={inlineErrorClass}>{draftValidation.guards.cashReservePct}</div> : null}
                   </div>
                 </div>
-              </>
-            ) : null}
+              </div>
+            </div>
+            </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -2333,8 +2228,13 @@ export function AutomationPage() {
               </div>
             </div>
 
-            {showAdvancedOptions ? (
-              <>
+            <div
+              className={cn(
+                "overflow-hidden transition-all duration-500 ease-out",
+                showAdvancedOptions ? "max-h-[6000px] opacity-100" : "max-h-0 opacity-0"
+              )}
+            >
+              <div className="space-y-3">
                 <div>
                   <label className="text-xs font-mono text-muted-foreground">Disabled Assets (comma separated)</label>
                   <input
@@ -2421,69 +2321,10 @@ export function AutomationPage() {
                     </div>
                   )}
                 </div>
-              </>
-            ) : null}
+              </div>
+            </div>
           </>
         )}
-          </div>
-        </div>
-      ) : null}
-
-      {isDemoBalanceModalOpen ? (
-        <div className="fixed inset-0 z-50 bg-background/75 p-4" onClick={() => setIsDemoBalanceModalOpen(false)}>
-          <div
-            className="mx-auto w-full max-w-md rounded-lg border border-border bg-card p-4 space-y-3"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Edit Demo Balance</div>
-                <div className="mt-1 text-xs font-mono text-muted-foreground">Set dummy USD funds used by demo strategy runs.</div>
-              </div>
-              <button
-                onClick={() => setIsDemoBalanceModalOpen(false)}
-                className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary"
-              >
-                Close
-              </button>
-            </div>
-
-            <div>
-              <label className="text-xs font-mono text-muted-foreground">Amount (USD$)</label>
-              <input
-                value={demoBalanceDraft}
-                onChange={(event) => setDemoBalanceDraft(event.target.value)}
-                className={cn(
-                  "mt-1 w-full rounded border bg-secondary px-2 py-2 text-sm font-mono text-foreground outline-none",
-                  !demoBalanceDraft || (Number.isFinite(demoBalanceParsed) && demoBalanceParsed > 0)
-                    ? "border-border"
-                    : "border-negative"
-                )}
-                placeholder="10000"
-                disabled={loadingDemoAccount || updateDemoBalanceMutation.isPending}
-              />
-            </div>
-
-            <div className="text-xs font-mono text-muted-foreground">
-              Current saved: {formatUsdToken(demoBalanceCurrent)}
-              {demoAccountData?.demoAccount.updatedAt ? `  |  Updated: ${formatDateTime(demoAccountData.demoAccount.updatedAt)}` : ""}
-            </div>
-
-            <div className="flex justify-end">
-              <button
-                onClick={handleSaveDemoBalance}
-                disabled={
-                  loadingDemoAccount ||
-                  updateDemoBalanceMutation.isPending ||
-                  !Number.isFinite(demoBalanceParsed) ||
-                  demoBalanceParsed <= 0 ||
-                  !demoBalanceDirty
-                }
-                className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60"
-              >
-                Save Demo Balance
-              </button>
-            </div>
           </div>
         </div>
       ) : null}
