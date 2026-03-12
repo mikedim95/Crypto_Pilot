@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { backendApi } from "@/lib/api";
-import { useBacktests, useDemoAccountSettings, useStrategies, useStrategyRunDetails, useStrategyRuns } from "@/hooks/useTradingData";
+import { useBacktests, useStrategies, useStrategyRunDetails, useStrategyRuns } from "@/hooks/useTradingData";
 import type {
   BacktestCreateRequest,
   PortfolioAccountType,
@@ -11,6 +11,10 @@ import type {
 } from "@/types/api";
 import { SpinnerValue } from "@/components/SpinnerValue";
 import { cn } from "@/lib/utils";
+
+interface AutomationPageProps {
+  accountType: PortfolioAccountType;
+}
 
 interface DraftAllocationRow {
   id: string;
@@ -144,6 +148,7 @@ const ACTION_TYPE_OPTIONS = [
 const RISK_OPTIONS = ["", "low", "medium", "high"];
 const TURNOVER_OPTIONS = ["", "low", "medium", "high"];
 const STABLE_EXPOSURE_OPTIONS = ["", "low", "medium", "high"];
+const SCHEDULE_PRESET_OPTIONS = ["30m", "1h", "4h", "1d"];
 const SCHEDULE_INTERVAL_PATTERN = /^\d+(m|h|d)$/;
 
 function newId(prefix: string): string {
@@ -176,6 +181,21 @@ function validateOptionalNumericField(
   }
 
   return undefined;
+}
+
+function parseStrategyIdCsv(value: string): string[] {
+  const normalized = value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+
+  return Array.from(new Set(normalized)).sort((left, right) => left.localeCompare(right));
+}
+
+function toStrategyIdCsv(ids: string[]): string {
+  return Array.from(new Set(ids.map((id) => id.trim().toLowerCase()).filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right))
+    .join(", ");
 }
 
 function validateDraft(draft: StrategyDraft): DraftValidationErrors {
@@ -270,10 +290,7 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
     errors.disabledAssetsCsv = `Invalid disabled asset: ${invalidDisabledAsset}`;
   }
 
-  const baseStrategies = draft.baseStrategiesCsv
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
+  const baseStrategies = parseStrategyIdCsv(draft.baseStrategiesCsv);
   const invalidBaseStrategy = baseStrategies.find((value) => !/^[a-z0-9-]+$/.test(value));
   if (invalidBaseStrategy) {
     errors.composition.baseStrategiesCsv = `Invalid base strategy id: ${invalidBaseStrategy}`;
@@ -499,11 +516,6 @@ function formatDateTime(value: string | undefined): string {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return "--";
   return parsed.toLocaleString();
-}
-
-function formatUsd(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
-  return value.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
 function formatDuration(startedAt: string | undefined, completedAt: string | undefined): string {
@@ -742,14 +754,7 @@ function draftToPayload(draft: StrategyDraft, strategyId: string): unknown {
     .map((value) => value.trim().toUpperCase())
     .filter(Boolean);
 
-  const baseStrategies = Array.from(
-    new Set(
-      draft.baseStrategiesCsv
-        .split(",")
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean)
-    )
-  );
+  const baseStrategies = parseStrategyIdCsv(draft.baseStrategiesCsv);
 
   const strategyWeights = draft.strategyWeightRows.reduce<Record<string, number>>((acc, row) => {
     const strategyRef = row.strategyId.trim().toLowerCase();
@@ -858,12 +863,10 @@ function createUsableStrategyDraft(baseStrategyIds: string[]): StrategyDraft {
 
 export function AutomationPage() {
   const queryClient = useQueryClient();
-  const [accountType, setAccountType] = useState<PortfolioAccountType>("real");
   const [isEditorModalOpen, setIsEditorModalOpen] = useState(false);
   const [isRunDetailsModalOpen, setIsRunDetailsModalOpen] = useState(false);
 
   const { data: strategyData, isPending: loadingStrategies, error: strategyError } = useStrategies();
-  const { data: demoAccountData, isPending: loadingDemoAccount } = useDemoAccountSettings();
   const { data: runData, isPending: loadingRuns } = useStrategyRuns(accountType);
   const { data: backtestData, isPending: loadingBacktests } = useBacktests();
 
@@ -876,7 +879,6 @@ export function AutomationPage() {
 
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [demoBalanceDraft, setDemoBalanceDraft] = useState("");
 
   const [draft, setDraft] = useState<StrategyDraft | null>(null);
   const [draftStrategyId, setDraftStrategyId] = useState("");
@@ -923,17 +925,54 @@ export function AutomationPage() {
     }
   }, [selectedRunId, runs]);
 
-  useEffect(() => {
-    const balance = demoAccountData?.demoAccount.balance;
-    if (typeof balance === "number" && Number.isFinite(balance)) {
-      setDemoBalanceDraft(String(balance));
-    }
-  }, [demoAccountData?.demoAccount.balance]);
-
   const selectedStrategy = useMemo(
     () => usableStrategies.find((strategy) => strategy.id === selectedStrategyId) ?? null,
     [selectedStrategyId, usableStrategies]
   );
+  const strategyNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    strategies.forEach((strategy) => {
+      map.set(strategy.id, strategy.name);
+    });
+    return map;
+  }, [strategies]);
+  const baseStrategyOptions = useMemo(
+    () =>
+      readOnlyStrategies
+        .map((strategy) => ({ id: strategy.id, name: strategy.name }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    [readOnlyStrategies]
+  );
+  const baseStrategyById = useMemo(
+    () =>
+      readOnlyStrategies.reduce<Map<string, StrategyConfig>>((acc, strategy) => {
+        acc.set(strategy.id, strategy);
+        return acc;
+      }, new Map<string, StrategyConfig>()),
+    [readOnlyStrategies]
+  );
+  const selectedBaseStrategyIds = useMemo(
+    () => parseStrategyIdCsv(draft?.baseStrategiesCsv ?? ""),
+    [draft?.baseStrategiesCsv]
+  );
+  const selectedBaseStrategiesLabel = useMemo(() => {
+    if (selectedBaseStrategyIds.length === 0) return "Select base strategies";
+    if (selectedBaseStrategyIds.length === 1) {
+      return strategyNameById.get(selectedBaseStrategyIds[0]) ?? selectedBaseStrategyIds[0];
+    }
+
+    const first = strategyNameById.get(selectedBaseStrategyIds[0]) ?? selectedBaseStrategyIds[0];
+    return `${first} +${selectedBaseStrategyIds.length - 1}`;
+  }, [selectedBaseStrategyIds, strategyNameById]);
+  const strategyDropdownOptions = useMemo(() => {
+    const preferredIds = selectedBaseStrategyIds.length > 0 ? selectedBaseStrategyIds : baseStrategyOptions.map((item) => item.id);
+    const normalizedIds = Array.from(new Set(preferredIds)).sort((left, right) => left.localeCompare(right));
+
+    return normalizedIds.map((strategyId) => ({
+      id: strategyId,
+      name: strategyNameById.get(strategyId) ?? strategyId,
+    }));
+  }, [baseStrategyOptions, selectedBaseStrategyIds, strategyNameById]);
 
   useEffect(() => {
     if (!selectedStrategy) return;
@@ -1057,30 +1096,44 @@ export function AutomationPage() {
     mutationFn: (payload: BacktestCreateRequest) => backendApi.createBacktest(payload),
     onSuccess: async (result) => {
       setErrorMessage("");
+      setMessage(`Created strategy ${result.strategy.name}.`);
+      setSelectedStrategyId(result.strategy.id);
+      setDraft(strategyToDraft(result.strategy));
+      setDraftStrategyId(result.strategy.id);
+      setDraftDirty(false);
+      setEditorMode("edit");
+      await invalidateAll();
+    },
+    onError: (error) => {
+      setMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to create strategy.");
+    },
+  });
+
+  const deleteStrategyMutation = useMutation({
+    mutationFn: (strategyId: string) => backendApi.deleteStrategy(strategyId),
+    onSuccess: async () => {
+      setErrorMessage("");
+      setMessage("Strategy deleted.");
+      setSelectedStrategyId("");
+      await invalidateAll();
+    },
+    onError: (error) => {
+      setMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to delete strategy.");
+    },
+  });
+
+  const backtestMutation = useMutation({
+    mutationFn: (payload: BacktestCreateRequest) => backendApi.createBacktest(payload),
+    onSuccess: async (result) => {
+      setErrorMessage("");
       setMessage(`Backtest ${result.backtestRun.id} started.`);
       await invalidateAll();
     },
     onError: (error) => {
       setMessage("");
       setErrorMessage(error instanceof Error ? error.message : "Unable to create backtest.");
-    },
-  });
-
-  const updateDemoBalanceMutation = useMutation({
-    mutationFn: (balance: number) => backendApi.updateDemoAccountSettings(balance),
-    onSuccess: async (result) => {
-      setErrorMessage("");
-      setMessage(`Demo balance updated to ${formatUsd(result.demoAccount.balance)}.`);
-      setDemoBalanceDraft(String(result.demoAccount.balance));
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["demo-account-settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId, "demo"] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId, "demo"] }),
-      ]);
-    },
-    onError: (error) => {
-      setMessage("");
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update demo balance.");
     },
   });
 
@@ -1095,6 +1148,7 @@ export function AutomationPage() {
 
   const draftValidation = useMemo(() => (draft ? validateDraft(draft) : null), [draft]);
   const draftHasErrors = draftValidation ? hasDraftValidationErrors(draftValidation) : false;
+  const showAdvancedOptions = editorMode === "edit" || showCreateAdvancedOptions;
 
   const editorFieldClass = (hasError?: boolean, compact?: boolean): string =>
     cn(
@@ -1138,6 +1192,28 @@ export function AutomationPage() {
     }));
   };
 
+  const toggleBaseStrategySelection = (strategyId: string): void => {
+    updateDraft((previous) => {
+      const selected = parseStrategyIdCsv(previous.baseStrategiesCsv);
+      const exists = selected.includes(strategyId);
+      const next = exists ? selected.filter((item) => item !== strategyId) : [...selected, strategyId];
+      const updatedDraft: StrategyDraft = {
+        ...previous,
+        baseStrategiesCsv: toStrategyIdCsv(next),
+      };
+
+      if (updatedDraft.compositionMode !== "automatic") {
+        return updatedDraft;
+      }
+
+      const selectedStrategies = next
+        .map((id) => baseStrategyById.get(id))
+        .filter((item): item is StrategyConfig => Boolean(item));
+
+      return applyAutomaticPrefill(updatedDraft, selectedStrategies);
+    });
+  };
+
   const updateStrategyWeightRow = (rowId: string, patch: Partial<DraftStrategyWeightRow>): void => {
     updateDraft((previous) => ({
       ...previous,
@@ -1155,7 +1231,17 @@ export function AutomationPage() {
   const addStrategyWeightRow = (): void => {
     updateDraft((previous) => ({
       ...previous,
-      strategyWeightRows: [...previous.strategyWeightRows, { id: newId("strategy-weight"), strategyId: "", weight: "" }],
+      strategyWeightRows: [
+        ...previous.strategyWeightRows,
+        {
+          id: newId("strategy-weight"),
+          strategyId:
+            strategyDropdownOptions.find(
+              (option) => !previous.strategyWeightRows.some((row) => row.strategyId === option.id)
+            )?.id ?? "",
+          weight: "",
+        },
+      ],
     }));
   };
 
@@ -1260,17 +1346,6 @@ export function AutomationPage() {
     });
   };
 
-  const handleSaveDemoBalance = (): void => {
-    const parsed = Number(demoBalanceDraft);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      setMessage("");
-      setErrorMessage("Demo balance must be a positive number.");
-      return;
-    }
-
-    updateDemoBalanceMutation.mutate(parsed);
-  };
-
   const openStrategyEditor = (strategyId: string): void => {
     setEditorMode("edit");
     setSelectedStrategyId(strategyId);
@@ -1286,6 +1361,7 @@ export function AutomationPage() {
   };
 
   const closeStrategyEditor = (): void => {
+    setShowCreateAdvancedOptions(false);
     setIsEditorModalOpen(false);
   };
 
@@ -1299,14 +1375,6 @@ export function AutomationPage() {
   };
 
   const runIndicators = selectedRun?.inputSnapshot?.marketSignals.indicators ?? {};
-  const demoBalanceCurrent = demoAccountData?.demoAccount.balance;
-  const demoBalanceParsed = Number(demoBalanceDraft);
-  const demoBalanceDirty =
-    typeof demoBalanceCurrent === "number" &&
-    Number.isFinite(demoBalanceCurrent) &&
-    Number.isFinite(demoBalanceParsed) &&
-    demoBalanceParsed > 0 &&
-    Math.abs(demoBalanceParsed - demoBalanceCurrent) > 0.000001;
 
   return (
     <div className="p-6 space-y-6">
@@ -1317,81 +1385,13 @@ export function AutomationPage() {
             Structured strategy editor, run detail explorer, and backtesting.
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            Active account:{" "}
+            Global account mode:{" "}
             <span className="font-mono text-foreground">
-              {accountType === "demo" ? "Demo (uses live market data)" : "Real Money"}
+              {accountType === "demo" ? "Dummy (uses live market data)" : "Real Money"}
             </span>
           </p>
         </div>
-
-        <div className="inline-flex rounded-md border border-border overflow-hidden">
-          <button
-            onClick={() => setAccountType("real")}
-            className={cn(
-              "px-3 py-2 text-xs font-mono transition-colors",
-              accountType === "real"
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-muted-foreground hover:text-foreground"
-            )}
-          >
-            Real Money
-          </button>
-          <button
-            onClick={() => setAccountType("demo")}
-            className={cn(
-              "px-3 py-2 text-xs font-mono transition-colors border-l border-border",
-              accountType === "demo"
-                ? "bg-primary text-primary-foreground"
-                : "bg-secondary text-muted-foreground hover:text-foreground"
-            )}
-          >
-            Demo Account
-          </button>
-        </div>
       </div>
-
-      {accountType === "demo" ? (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Demo Balance</div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            This balance is used for subsequent demo strategy evaluations and run-now executions.
-          </div>
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
-            <div className="w-full sm:max-w-xs">
-              <label className="text-xs font-mono text-muted-foreground">Balance (USD)</label>
-              <input
-                value={demoBalanceDraft}
-                onChange={(event) => setDemoBalanceDraft(event.target.value)}
-                className={cn(
-                  "mt-1 w-full rounded border bg-secondary px-2 py-2 text-xs font-mono text-foreground outline-none",
-                  !demoBalanceDraft || (Number.isFinite(demoBalanceParsed) && demoBalanceParsed > 0)
-                    ? "border-border"
-                    : "border-negative"
-                )}
-                placeholder="10000"
-                disabled={loadingDemoAccount || updateDemoBalanceMutation.isPending}
-              />
-            </div>
-            <button
-              onClick={handleSaveDemoBalance}
-              disabled={
-                loadingDemoAccount ||
-                updateDemoBalanceMutation.isPending ||
-                !Number.isFinite(demoBalanceParsed) ||
-                demoBalanceParsed <= 0 ||
-                !demoBalanceDirty
-              }
-              className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60"
-            >
-              Save Demo Balance
-            </button>
-          </div>
-          <div className="mt-2 text-xs font-mono text-muted-foreground">
-            Current saved balance: {formatUsd(demoBalanceCurrent)}
-            {demoAccountData?.demoAccount.updatedAt ? `  |  Updated: ${formatDateTime(demoAccountData.demoAccount.updatedAt)}` : ""}
-          </div>
-        </div>
-      ) : null}
 
       {strategyError ? (
         <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">
@@ -1548,7 +1548,20 @@ export function AutomationPage() {
               </div>
               <div>
                 <label className="text-muted-foreground">Schedule Interval</label>
-                <input value={draft.scheduleInterval} onChange={(event) => updateDraft((prev) => ({ ...prev, scheduleInterval: event.target.value }))} className={editorFieldClass(Boolean(draftValidation?.scheduleInterval))} placeholder="15m" />
+                <select
+                  value={draft.scheduleInterval}
+                  onChange={(event) => updateDraft((prev) => ({ ...prev, scheduleInterval: event.target.value }))}
+                  className={editorFieldClass(Boolean(draftValidation?.scheduleInterval))}
+                >
+                  {!SCHEDULE_PRESET_OPTIONS.includes(draft.scheduleInterval) ? (
+                    <option value={draft.scheduleInterval}>{draft.scheduleInterval}</option>
+                  ) : null}
+                  {SCHEDULE_PRESET_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
                 {draftValidation?.scheduleInterval ? <div className={inlineErrorClass}>{draftValidation.scheduleInterval}</div> : null}
               </div>
               <div className="flex items-end">
@@ -1560,14 +1573,46 @@ export function AutomationPage() {
             </div>
 
             <div className="rounded border border-border bg-secondary/20 p-3 space-y-3">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Composition</div>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Composition</div>
+                  {editorMode === "create" ? (
+                    <div className="mt-1 text-xs text-muted-foreground">Keep defaults or expand to customize strategy behavior.</div>
+                  ) : null}
+                </div>
+                {editorMode === "create" ? (
+                  <button
+                    onClick={() => setShowCreateAdvancedOptions((previous) => !previous)}
+                    className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary transition-all duration-300 hover:-translate-y-0.5"
+                  >
+                    {showCreateAdvancedOptions ? "Hide Advanced" : "Show Advanced"}
+                  </button>
+                ) : null}
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
                 <div>
                   <label className="text-muted-foreground">Composition Mode</label>
                   <select
                     value={draft.compositionMode}
                     onChange={(event) =>
-                      updateDraft((prev) => ({ ...prev, compositionMode: event.target.value as StrategyCompositionMode }))
+                      updateDraft((prev) => {
+                        const compositionMode = event.target.value as StrategyCompositionMode;
+                        const updated: StrategyDraft = {
+                          ...prev,
+                          compositionMode,
+                          autoStrategyUsage: compositionMode === "automatic" ? true : prev.autoStrategyUsage,
+                        };
+
+                        if (compositionMode !== "automatic") {
+                          return updated;
+                        }
+
+                        const selectedIds = parseStrategyIdCsv(updated.baseStrategiesCsv);
+                        const selectedStrategies = selectedIds
+                          .map((id) => baseStrategyById.get(id))
+                          .filter((item): item is StrategyConfig => Boolean(item));
+                        return applyAutomaticPrefill(updated, selectedStrategies);
+                      })
                     }
                     className={editorFieldClass(false)}
                   >
@@ -1579,305 +1624,397 @@ export function AutomationPage() {
                   </select>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="text-muted-foreground">Selected Base Strategies (comma separated ids)</label>
-                  <input
-                    value={draft.baseStrategiesCsv}
-                    onChange={(event) => updateDraft((prev) => ({ ...prev, baseStrategiesCsv: event.target.value }))}
-                    className={editorFieldClass(Boolean(draftValidation?.composition.baseStrategiesCsv))}
-                    placeholder="momentum-rotation, volatility-hedge"
-                  />
+                  <label className="text-muted-foreground">Selected Base Strategies</label>
+                  <details className="relative mt-1">
+                    <summary
+                      className={cn(
+                        "w-full rounded border bg-secondary px-2 py-2 text-foreground outline-none cursor-pointer list-none [&::-webkit-details-marker]:hidden",
+                        draftValidation?.composition.baseStrategiesCsv ? "border-negative" : "border-border"
+                      )}
+                    >
+                      {selectedBaseStrategiesLabel}
+                    </summary>
+                    <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded border border-border bg-card p-2">
+                      {baseStrategyOptions.length === 0 ? (
+                        <div className="text-xs font-mono text-muted-foreground">No base strategies available.</div>
+                      ) : (
+                        <div className="space-y-1">
+                          {baseStrategyOptions.map((option) => {
+                            const checked = selectedBaseStrategyIds.includes(option.id);
+                            return (
+                              <label key={option.id} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-secondary/30">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleBaseStrategySelection(option.id)}
+                                  className="h-4 w-4"
+                                />
+                                <span className="text-xs font-mono text-foreground">{option.name}</span>
+                                <span className="text-[11px] font-mono text-muted-foreground">({option.id})</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </details>
                   {draftValidation?.composition.baseStrategiesCsv ? (
                     <div className={inlineErrorClass}>{draftValidation.composition.baseStrategiesCsv}</div>
                   ) : null}
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 text-xs font-mono text-foreground">
-                <input
-                  type="checkbox"
-                  checked={draft.autoStrategyUsage}
-                  onChange={(event) => updateDraft((prev) => ({ ...prev, autoStrategyUsage: event.target.checked }))}
-                  className="h-4 w-4"
-                />
-                Auto Strategy Usage
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Weights</div>
-                  <button
-                    onClick={addStrategyWeightRow}
-                    className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary"
-                  >
-                    Add Row
-                  </button>
-                </div>
-                {draftValidation?.composition.strategyWeightRows ? (
-                  <div className={inlineErrorClass}>{draftValidation.composition.strategyWeightRows}</div>
-                ) : null}
-                {draft.strategyWeightRows.length === 0 ? (
-                  <div className="text-xs text-muted-foreground">No strategy weights defined.</div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {draft.strategyWeightRows.map((row) => (
-                      <div
-                        key={row.id}
-                        className="rounded border border-border bg-secondary/30 p-2 grid grid-cols-12 gap-2 items-end text-xs font-mono"
-                      >
-                        <div className="col-span-6">
-                          <label className="text-muted-foreground">Strategy ID</label>
-                          <input
-                            value={row.strategyId}
-                            onChange={(event) => updateStrategyWeightRow(row.id, { strategyId: event.target.value })}
-                            className={editorFieldClass(Boolean(draftValidation?.strategyWeightRows[row.id]?.strategyId), true)}
-                          />
-                          {draftValidation?.strategyWeightRows[row.id]?.strategyId ? (
-                            <div className={inlineErrorClass}>{draftValidation.strategyWeightRows[row.id]?.strategyId}</div>
-                          ) : null}
-                        </div>
-                        <div className="col-span-4">
-                          <label className="text-muted-foreground">Weight</label>
-                          <input
-                            value={row.weight}
-                            onChange={(event) => updateStrategyWeightRow(row.id, { weight: event.target.value })}
-                            className={editorFieldClass(Boolean(draftValidation?.strategyWeightRows[row.id]?.weight), true)}
-                          />
-                          {draftValidation?.strategyWeightRows[row.id]?.weight ? (
-                            <div className={inlineErrorClass}>{draftValidation.strategyWeightRows[row.id]?.weight}</div>
-                          ) : null}
-                        </div>
-                        <div className="col-span-2">
-                          <button
-                            onClick={() => removeStrategyWeightRow(row.id)}
-                            className="w-full px-2 py-1.5 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary"
-                          >
-                            Del
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+              <div
+                className={cn(
+                  "overflow-hidden transition-all duration-500 ease-out",
+                  showAdvancedOptions ? "max-h-[5000px] opacity-100" : "max-h-0 opacity-0"
                 )}
+              >
+                <div className="space-y-3 pt-1">
+                  <div className="flex items-center gap-2 text-xs font-mono text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={draft.autoStrategyUsage}
+                      onChange={(event) =>
+                        updateDraft((prev) => {
+                          const autoStrategyUsage = event.target.checked;
+                          const updated: StrategyDraft = { ...prev, autoStrategyUsage };
+                          if (!autoStrategyUsage) return updated;
+
+                          const selectedIds = parseStrategyIdCsv(updated.baseStrategiesCsv);
+                          const selectedStrategies = selectedIds
+                            .map((id) => baseStrategyById.get(id))
+                            .filter((item): item is StrategyConfig => Boolean(item));
+                          return applyAutomaticPrefill(updated, selectedStrategies);
+                        })
+                      }
+                      className="h-4 w-4"
+                    />
+                    Auto Strategy Usage
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Weights</div>
+                      <button
+                        onClick={addStrategyWeightRow}
+                        className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary"
+                      >
+                        Add Row
+                      </button>
+                    </div>
+                    {draftValidation?.composition.strategyWeightRows ? (
+                      <div className={inlineErrorClass}>{draftValidation.composition.strategyWeightRows}</div>
+                    ) : null}
+                    {draft.strategyWeightRows.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">No strategy weights defined.</div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {draft.strategyWeightRows.map((row) => (
+                          <div
+                            key={row.id}
+                            className="rounded border border-border bg-secondary/30 p-2 grid grid-cols-12 gap-2 items-end text-xs font-mono"
+                          >
+                            <div className="col-span-6">
+                              <label className="text-muted-foreground">Strategy ID</label>
+                              <select
+                                value={row.strategyId}
+                                onChange={(event) => updateStrategyWeightRow(row.id, { strategyId: event.target.value })}
+                                className={editorFieldClass(Boolean(draftValidation?.strategyWeightRows[row.id]?.strategyId), true)}
+                              >
+                                <option value="">Select strategy</option>
+                                {strategyDropdownOptions.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.name} ({option.id})
+                                  </option>
+                                ))}
+                              </select>
+                              {draftValidation?.strategyWeightRows[row.id]?.strategyId ? (
+                                <div className={inlineErrorClass}>{draftValidation.strategyWeightRows[row.id]?.strategyId}</div>
+                              ) : null}
+                            </div>
+                            <div className="col-span-4">
+                              <label className="text-muted-foreground">Weight</label>
+                              <input
+                                value={row.weight}
+                                onChange={(event) => updateStrategyWeightRow(row.id, { weight: event.target.value })}
+                                className={editorFieldClass(Boolean(draftValidation?.strategyWeightRows[row.id]?.weight), true)}
+                                placeholder="25"
+                              />
+                              {draftValidation?.strategyWeightRows[row.id]?.weight ? (
+                                <div className={inlineErrorClass}>{draftValidation.strategyWeightRows[row.id]?.weight}</div>
+                              ) : null}
+                            </div>
+                            <div className="col-span-2">
+                              <button
+                                onClick={() => removeStrategyWeightRow(row.id)}
+                                className="w-full px-2 py-1.5 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary"
+                              >
+                                Del
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
+                    <div>
+                      <label className="text-muted-foreground">Min Strategy Score</label>
+                      <input
+                        value={draft.selectionConfig.minStrategyScore}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            selectionConfig: { ...prev.selectionConfig, minStrategyScore: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.minStrategyScore))}
+                        placeholder="0.45"
+                      />
+                      {draftValidation?.composition.minStrategyScore ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.minStrategyScore}</div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="text-muted-foreground">Max Active Strategies</label>
+                      <input
+                        value={draft.selectionConfig.maxActiveStrategies}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            selectionConfig: { ...prev.selectionConfig, maxActiveStrategies: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.maxActiveStrategies))}
+                        placeholder="3"
+                      />
+                      {draftValidation?.composition.maxActiveStrategies ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.maxActiveStrategies}</div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="text-muted-foreground">Max Weight Shift / Cycle</label>
+                      <input
+                        value={draft.selectionConfig.maxWeightShiftPerCycle}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            selectionConfig: { ...prev.selectionConfig, maxWeightShiftPerCycle: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.maxWeightShiftPerCycle))}
+                        placeholder="15"
+                      />
+                      {draftValidation?.composition.maxWeightShiftPerCycle ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.maxWeightShiftPerCycle}</div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="text-muted-foreground">Strategy Cooldown (hours)</label>
+                      <input
+                        value={draft.selectionConfig.strategyCooldownHours}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            selectionConfig: { ...prev.selectionConfig, strategyCooldownHours: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.strategyCooldownHours))}
+                        placeholder="6"
+                      />
+                      {draftValidation?.composition.strategyCooldownHours ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.strategyCooldownHours}</div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="text-muted-foreground">Min Active Duration (hours)</label>
+                      <input
+                        value={draft.selectionConfig.minActiveDurationHours}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            selectionConfig: { ...prev.selectionConfig, minActiveDurationHours: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.minActiveDurationHours))}
+                        placeholder="12"
+                      />
+                      {draftValidation?.composition.minActiveDurationHours ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.minActiveDurationHours}</div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="text-muted-foreground">Fallback Strategy</label>
+                      <select
+                        value={draft.selectionConfig.fallbackStrategy}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            selectionConfig: { ...prev.selectionConfig, fallbackStrategy: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.fallbackStrategy))}
+                      >
+                        <option value="">Auto (top score)</option>
+                        {draft.selectionConfig.fallbackStrategy &&
+                        !strategyDropdownOptions.some((option) => option.id === draft.selectionConfig.fallbackStrategy) ? (
+                          <option value={draft.selectionConfig.fallbackStrategy}>
+                            {strategyNameById.get(draft.selectionConfig.fallbackStrategy) ??
+                              draft.selectionConfig.fallbackStrategy}
+                          </option>
+                        ) : null}
+                        {strategyDropdownOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.name} ({option.id})
+                          </option>
+                        ))}
+                      </select>
+                      {draftValidation?.composition.fallbackStrategy ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.fallbackStrategy}</div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
+                    <div>
+                      <label className="text-muted-foreground">Score Power</label>
+                      <input
+                        value={draft.weightAdjustment.scorePower}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            weightAdjustment: { ...prev.weightAdjustment, scorePower: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.scorePower))}
+                        placeholder="1"
+                      />
+                      {draftValidation?.composition.scorePower ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.scorePower}</div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="text-muted-foreground">Min Weight % / Strategy</label>
+                      <input
+                        value={draft.weightAdjustment.minWeightPctPerStrategy}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            weightAdjustment: { ...prev.weightAdjustment, minWeightPctPerStrategy: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.minWeightPctPerStrategy))}
+                        placeholder="10"
+                      />
+                      {draftValidation?.composition.minWeightPctPerStrategy ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.minWeightPctPerStrategy}</div>
+                      ) : null}
+                    </div>
+                    <div>
+                      <label className="text-muted-foreground">Max Weight % / Strategy</label>
+                      <input
+                        value={draft.weightAdjustment.maxWeightPctPerStrategy}
+                        onChange={(event) =>
+                          updateDraft((prev) => ({
+                            ...prev,
+                            weightAdjustment: { ...prev.weightAdjustment, maxWeightPctPerStrategy: event.target.value },
+                          }))
+                        }
+                        className={editorFieldClass(Boolean(draftValidation?.composition.maxWeightPctPerStrategy))}
+                        placeholder="60"
+                      />
+                      {draftValidation?.composition.maxWeightPctPerStrategy ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.maxWeightPctPerStrategy}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
-                <div>
-                  <label className="text-muted-foreground">Min Strategy Score</label>
-                  <input
-                    value={draft.selectionConfig.minStrategyScore}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        selectionConfig: { ...prev.selectionConfig, minStrategyScore: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.minStrategyScore))}
-                  />
-                  {draftValidation?.composition.minStrategyScore ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.minStrategyScore}</div>
-                  ) : null}
+            <div
+              className={cn(
+                "overflow-hidden transition-all duration-500 ease-out",
+                showAdvancedOptions ? "max-h-[2000px] opacity-100" : "max-h-0 opacity-0"
+              )}
+            >
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
+                  <div>
+                    <label className="text-muted-foreground">Risk Level</label>
+                    <select value={draft.metadataRiskLevel} onChange={(event) => updateDraft((prev) => ({ ...prev, metadataRiskLevel: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none">
+                      {RISK_OPTIONS.map((option) => <option key={option} value={option}>{option || "--"}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-muted-foreground">Expected Turnover</label>
+                    <select value={draft.metadataExpectedTurnover} onChange={(event) => updateDraft((prev) => ({ ...prev, metadataExpectedTurnover: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none">
+                      {TURNOVER_OPTIONS.map((option) => <option key={option} value={option}>{option || "--"}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-muted-foreground">Stablecoin Exposure</label>
+                    <select value={draft.metadataStablecoinExposure} onChange={(event) => updateDraft((prev) => ({ ...prev, metadataStablecoinExposure: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none">
+                      {STABLE_EXPOSURE_OPTIONS.map((option) => <option key={option} value={option}>{option || "--"}</option>)}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-muted-foreground">Max Active Strategies</label>
-                  <input
-                    value={draft.selectionConfig.maxActiveStrategies}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        selectionConfig: { ...prev.selectionConfig, maxActiveStrategies: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.maxActiveStrategies))}
-                  />
-                  {draftValidation?.composition.maxActiveStrategies ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.maxActiveStrategies}</div>
-                  ) : null}
-                </div>
-                <div>
-                  <label className="text-muted-foreground">Max Weight Shift / Cycle</label>
-                  <input
-                    value={draft.selectionConfig.maxWeightShiftPerCycle}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        selectionConfig: { ...prev.selectionConfig, maxWeightShiftPerCycle: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.maxWeightShiftPerCycle))}
-                  />
-                  {draftValidation?.composition.maxWeightShiftPerCycle ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.maxWeightShiftPerCycle}</div>
-                  ) : null}
-                </div>
-                <div>
-                  <label className="text-muted-foreground">Strategy Cooldown (hours)</label>
-                  <input
-                    value={draft.selectionConfig.strategyCooldownHours}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        selectionConfig: { ...prev.selectionConfig, strategyCooldownHours: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.strategyCooldownHours))}
-                  />
-                  {draftValidation?.composition.strategyCooldownHours ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.strategyCooldownHours}</div>
-                  ) : null}
-                </div>
-                <div>
-                  <label className="text-muted-foreground">Min Active Duration (hours)</label>
-                  <input
-                    value={draft.selectionConfig.minActiveDurationHours}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        selectionConfig: { ...prev.selectionConfig, minActiveDurationHours: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.minActiveDurationHours))}
-                  />
-                  {draftValidation?.composition.minActiveDurationHours ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.minActiveDurationHours}</div>
-                  ) : null}
-                </div>
-                <div>
-                  <label className="text-muted-foreground">Fallback Strategy</label>
-                  <input
-                    value={draft.selectionConfig.fallbackStrategy}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        selectionConfig: { ...prev.selectionConfig, fallbackStrategy: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.fallbackStrategy))}
-                  />
-                  {draftValidation?.composition.fallbackStrategy ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.fallbackStrategy}</div>
-                  ) : null}
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
-                <div>
-                  <label className="text-muted-foreground">Score Power</label>
-                  <input
-                    value={draft.weightAdjustment.scorePower}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        weightAdjustment: { ...prev.weightAdjustment, scorePower: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.scorePower))}
-                  />
-                  {draftValidation?.composition.scorePower ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.scorePower}</div>
-                  ) : null}
-                </div>
-                <div>
-                  <label className="text-muted-foreground">Min Weight % / Strategy</label>
-                  <input
-                    value={draft.weightAdjustment.minWeightPctPerStrategy}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        weightAdjustment: { ...prev.weightAdjustment, minWeightPctPerStrategy: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.minWeightPctPerStrategy))}
-                  />
-                  {draftValidation?.composition.minWeightPctPerStrategy ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.minWeightPctPerStrategy}</div>
-                  ) : null}
-                </div>
-                <div>
-                  <label className="text-muted-foreground">Max Weight % / Strategy</label>
-                  <input
-                    value={draft.weightAdjustment.maxWeightPctPerStrategy}
-                    onChange={(event) =>
-                      updateDraft((prev) => ({
-                        ...prev,
-                        weightAdjustment: { ...prev.weightAdjustment, maxWeightPctPerStrategy: event.target.value },
-                      }))
-                    }
-                    className={editorFieldClass(Boolean(draftValidation?.composition.maxWeightPctPerStrategy))}
-                  />
-                  {draftValidation?.composition.maxWeightPctPerStrategy ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.maxWeightPctPerStrategy}</div>
-                  ) : null}
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-xs font-mono">
+                  <div>
+                    <label className="text-muted-foreground">Max Single %</label>
+                    <input
+                      value={draft.guards.maxSingleAssetPct}
+                      onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxSingleAssetPct: event.target.value } }))}
+                      className={editorFieldClass(Boolean(draftValidation?.guards.maxSingleAssetPct))}
+                      placeholder="55"
+                    />
+                    {draftValidation?.guards.maxSingleAssetPct ? <div className={inlineErrorClass}>{draftValidation.guards.maxSingleAssetPct}</div> : null}
+                  </div>
+                  <div>
+                    <label className="text-muted-foreground">Min Stable %</label>
+                    <input
+                      value={draft.guards.minStablecoinPct}
+                      onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minStablecoinPct: event.target.value } }))}
+                      className={editorFieldClass(Boolean(draftValidation?.guards.minStablecoinPct))}
+                      placeholder="12"
+                    />
+                    {draftValidation?.guards.minStablecoinPct ? <div className={inlineErrorClass}>{draftValidation.guards.minStablecoinPct}</div> : null}
+                  </div>
+                  <div>
+                    <label className="text-muted-foreground">Max Trades</label>
+                    <input
+                      value={draft.guards.maxTradesPerCycle}
+                      onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxTradesPerCycle: event.target.value } }))}
+                      className={editorFieldClass(Boolean(draftValidation?.guards.maxTradesPerCycle))}
+                      placeholder="6"
+                    />
+                    {draftValidation?.guards.maxTradesPerCycle ? <div className={inlineErrorClass}>{draftValidation.guards.maxTradesPerCycle}</div> : null}
+                  </div>
+                  <div>
+                    <label className="text-muted-foreground">Min Notional</label>
+                    <input
+                      value={draft.guards.minTradeNotional}
+                      onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minTradeNotional: event.target.value } }))}
+                      className={editorFieldClass(Boolean(draftValidation?.guards.minTradeNotional))}
+                      placeholder="25"
+                    />
+                    {draftValidation?.guards.minTradeNotional ? <div className={inlineErrorClass}>{draftValidation.guards.minTradeNotional}</div> : null}
+                  </div>
+                  <div>
+                    <label className="text-muted-foreground">Cash Reserve %</label>
+                    <input
+                      value={draft.guards.cashReservePct}
+                      onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, cashReservePct: event.target.value } }))}
+                      className={editorFieldClass(Boolean(draftValidation?.guards.cashReservePct))}
+                      placeholder="8"
+                    />
+                    {draftValidation?.guards.cashReservePct ? <div className={inlineErrorClass}>{draftValidation.guards.cashReservePct}</div> : null}
+                  </div>
                 </div>
               </div>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
-              <div>
-                <label className="text-muted-foreground">Risk Level</label>
-                <select value={draft.metadataRiskLevel} onChange={(event) => updateDraft((prev) => ({ ...prev, metadataRiskLevel: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none">
-                  {RISK_OPTIONS.map((option) => <option key={option} value={option}>{option || "--"}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-muted-foreground">Expected Turnover</label>
-                <select value={draft.metadataExpectedTurnover} onChange={(event) => updateDraft((prev) => ({ ...prev, metadataExpectedTurnover: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none">
-                  {TURNOVER_OPTIONS.map((option) => <option key={option} value={option}>{option || "--"}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-muted-foreground">Stablecoin Exposure</label>
-                <select value={draft.metadataStablecoinExposure} onChange={(event) => updateDraft((prev) => ({ ...prev, metadataStablecoinExposure: event.target.value }))} className="mt-1 w-full rounded border border-border bg-secondary px-2 py-2 text-foreground outline-none">
-                  {STABLE_EXPOSURE_OPTIONS.map((option) => <option key={option} value={option}>{option || "--"}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-xs font-mono">
-              <div>
-                <label className="text-muted-foreground">Max Single %</label>
-                <input
-                  value={draft.guards.maxSingleAssetPct}
-                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxSingleAssetPct: event.target.value } }))}
-                  className={editorFieldClass(Boolean(draftValidation?.guards.maxSingleAssetPct))}
-                />
-                {draftValidation?.guards.maxSingleAssetPct ? <div className={inlineErrorClass}>{draftValidation.guards.maxSingleAssetPct}</div> : null}
-              </div>
-              <div>
-                <label className="text-muted-foreground">Min Stable %</label>
-                <input
-                  value={draft.guards.minStablecoinPct}
-                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minStablecoinPct: event.target.value } }))}
-                  className={editorFieldClass(Boolean(draftValidation?.guards.minStablecoinPct))}
-                />
-                {draftValidation?.guards.minStablecoinPct ? <div className={inlineErrorClass}>{draftValidation.guards.minStablecoinPct}</div> : null}
-              </div>
-              <div>
-                <label className="text-muted-foreground">Max Trades</label>
-                <input
-                  value={draft.guards.maxTradesPerCycle}
-                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, maxTradesPerCycle: event.target.value } }))}
-                  className={editorFieldClass(Boolean(draftValidation?.guards.maxTradesPerCycle))}
-                />
-                {draftValidation?.guards.maxTradesPerCycle ? <div className={inlineErrorClass}>{draftValidation.guards.maxTradesPerCycle}</div> : null}
-              </div>
-              <div>
-                <label className="text-muted-foreground">Min Notional</label>
-                <input
-                  value={draft.guards.minTradeNotional}
-                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, minTradeNotional: event.target.value } }))}
-                  className={editorFieldClass(Boolean(draftValidation?.guards.minTradeNotional))}
-                />
-                {draftValidation?.guards.minTradeNotional ? <div className={inlineErrorClass}>{draftValidation.guards.minTradeNotional}</div> : null}
-              </div>
-              <div>
-                <label className="text-muted-foreground">Cash Reserve %</label>
-                <input
-                  value={draft.guards.cashReservePct}
-                  onChange={(event) => updateDraft((prev) => ({ ...prev, guards: { ...prev.guards, cashReservePct: event.target.value } }))}
-                  className={editorFieldClass(Boolean(draftValidation?.guards.cashReservePct))}
-                />
-                {draftValidation?.guards.cashReservePct ? <div className={inlineErrorClass}>{draftValidation.guards.cashReservePct}</div> : null}
-              </div>
             </div>
 
             <div className="space-y-2">
@@ -1913,91 +2050,100 @@ export function AutomationPage() {
               </div>
             </div>
 
-            <div>
-              <label className="text-xs font-mono text-muted-foreground">Disabled Assets (comma separated)</label>
-              <input
-                value={draft.disabledAssetsCsv}
-                onChange={(event) => updateDraft((prev) => ({ ...prev, disabledAssetsCsv: event.target.value }))}
-                className={cn(editorFieldClass(Boolean(draftValidation?.disabledAssetsCsv)), "text-xs font-mono")}
-                placeholder="DOGE, SHIB"
-              />
-              {draftValidation?.disabledAssetsCsv ? <div className={inlineErrorClass}>{draftValidation.disabledAssetsCsv}</div> : null}
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Rules</div>
-                <button onClick={addRule} className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary">Add Rule</button>
-              </div>
-
-              {draft.rules.length === 0 ? (
-                <div className="text-sm text-muted-foreground">No rules defined.</div>
-              ) : (
-                <div className="space-y-2">
-                  {draft.rules.map((rule, index) => {
-                    const ruleErrors = draftValidation?.rules[String(index)];
-
-                    return (
-                    <div key={rule.id} className="rounded border border-border bg-secondary/30 p-3 space-y-2 text-xs font-mono">
-                      <div className="flex items-center justify-between">
-                        <div className="text-foreground">Rule {index + 1}</div>
-                        <button onClick={() => removeRule(rule.id)} className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary">Remove</button>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                        <div>
-                          <label className="text-muted-foreground">ID</label>
-                          <input value={rule.id} onChange={(event) => updateRule(rule.id, { id: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.id), true)} />
-                          {ruleErrors?.id ? <div className={inlineErrorClass}>{ruleErrors.id}</div> : null}
-                        </div>
-                        <div><label className="text-muted-foreground">Name</label><input value={rule.name} onChange={(event) => updateRule(rule.id, { name: event.target.value })} className={editorFieldClass(false, true)} /></div>
-                        <div>
-                          <label className="text-muted-foreground">Priority</label>
-                          <input value={rule.priority} onChange={(event) => updateRule(rule.id, { priority: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.priority), true)} />
-                          {ruleErrors?.priority ? <div className={inlineErrorClass}>{ruleErrors.priority}</div> : null}
-                        </div>
-                        <div className="md:col-span-2 flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(rule.id, { enabled: event.target.checked })} /> Enabled</label></div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                        <div><label className="text-muted-foreground">Indicator</label><select value={rule.conditionIndicator} onChange={(event) => updateRule(rule.id, { conditionIndicator: event.target.value })} className={editorFieldClass(false, true)}>{INDICATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
-                        <div><label className="text-muted-foreground">Operator</label><select value={rule.conditionOperator} onChange={(event) => updateRule(rule.id, { conditionOperator: event.target.value })} className={editorFieldClass(false, true)}>{OPERATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
-                        <div>
-                          <label className="text-muted-foreground">Value</label>
-                          <input value={rule.conditionValue} onChange={(event) => updateRule(rule.id, { conditionValue: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.conditionValue), true)} />
-                          {ruleErrors?.conditionValue ? <div className={inlineErrorClass}>{ruleErrors.conditionValue}</div> : null}
-                        </div>
-                        <div><label className="text-muted-foreground">Condition Asset</label><input value={rule.conditionAsset} onChange={(event) => updateRule(rule.id, { conditionAsset: event.target.value })} className={editorFieldClass(false, true)} /></div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                        <div><label className="text-muted-foreground">Action</label><select value={rule.actionType} onChange={(event) => updateRule(rule.id, { actionType: event.target.value })} className={editorFieldClass(false, true)}>{ACTION_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
-                        <div>
-                          <label className="text-muted-foreground">Percent</label>
-                          <input value={rule.actionPercent} onChange={(event) => updateRule(rule.id, { actionPercent: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionPercent), true)} />
-                          {ruleErrors?.actionPercent ? <div className={inlineErrorClass}>{ruleErrors.actionPercent}</div> : null}
-                        </div>
-                        <div>
-                          <label className="text-muted-foreground">Action Asset</label>
-                          <input value={rule.actionAsset} onChange={(event) => updateRule(rule.id, { actionAsset: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionAsset), true)} />
-                          {ruleErrors?.actionAsset ? <div className={inlineErrorClass}>{ruleErrors.actionAsset}</div> : null}
-                        </div>
-                        <div>
-                          <label className="text-muted-foreground">From</label>
-                          <input value={rule.actionFrom} onChange={(event) => updateRule(rule.id, { actionFrom: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionFrom), true)} />
-                          {ruleErrors?.actionFrom ? <div className={inlineErrorClass}>{ruleErrors.actionFrom}</div> : null}
-                        </div>
-                        <div>
-                          <label className="text-muted-foreground">To</label>
-                          <input value={rule.actionTo} onChange={(event) => updateRule(rule.id, { actionTo: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionTo), true)} />
-                          {ruleErrors?.actionTo ? <div className={inlineErrorClass}>{ruleErrors.actionTo}</div> : null}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                  })}
-                </div>
+            <div
+              className={cn(
+                "overflow-hidden transition-all duration-500 ease-out",
+                showAdvancedOptions ? "max-h-[6000px] opacity-100" : "max-h-0 opacity-0"
               )}
+            >
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-mono text-muted-foreground">Disabled Assets (comma separated)</label>
+                  <input
+                    value={draft.disabledAssetsCsv}
+                    onChange={(event) => updateDraft((prev) => ({ ...prev, disabledAssetsCsv: event.target.value }))}
+                    className={cn(editorFieldClass(Boolean(draftValidation?.disabledAssetsCsv)), "text-xs font-mono")}
+                    placeholder="DOGE, SHIB"
+                  />
+                  {draftValidation?.disabledAssetsCsv ? <div className={inlineErrorClass}>{draftValidation.disabledAssetsCsv}</div> : null}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Rules</div>
+                    <button onClick={addRule} className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary">Add Rule</button>
+                  </div>
+
+                  {draft.rules.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">No rules defined.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {draft.rules.map((rule, index) => {
+                        const ruleErrors = draftValidation?.rules[String(index)];
+
+                        return (
+                        <div key={rule.id} className="rounded border border-border bg-secondary/30 p-3 space-y-2 text-xs font-mono">
+                          <div className="flex items-center justify-between">
+                            <div className="text-foreground">Rule {index + 1}</div>
+                            <button onClick={() => removeRule(rule.id)} className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary">Remove</button>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                            <div>
+                              <label className="text-muted-foreground">ID</label>
+                              <input value={rule.id} onChange={(event) => updateRule(rule.id, { id: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.id), true)} />
+                              {ruleErrors?.id ? <div className={inlineErrorClass}>{ruleErrors.id}</div> : null}
+                            </div>
+                            <div><label className="text-muted-foreground">Name</label><input value={rule.name} onChange={(event) => updateRule(rule.id, { name: event.target.value })} className={editorFieldClass(false, true)} /></div>
+                            <div>
+                              <label className="text-muted-foreground">Priority</label>
+                              <input value={rule.priority} onChange={(event) => updateRule(rule.id, { priority: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.priority), true)} />
+                              {ruleErrors?.priority ? <div className={inlineErrorClass}>{ruleErrors.priority}</div> : null}
+                            </div>
+                            <div className="md:col-span-2 flex items-end"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(rule.id, { enabled: event.target.checked })} /> Enabled</label></div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                            <div><label className="text-muted-foreground">Indicator</label><select value={rule.conditionIndicator} onChange={(event) => updateRule(rule.id, { conditionIndicator: event.target.value })} className={editorFieldClass(false, true)}>{INDICATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
+                            <div><label className="text-muted-foreground">Operator</label><select value={rule.conditionOperator} onChange={(event) => updateRule(rule.id, { conditionOperator: event.target.value })} className={editorFieldClass(false, true)}>{OPERATOR_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
+                            <div>
+                              <label className="text-muted-foreground">Value</label>
+                              <input value={rule.conditionValue} onChange={(event) => updateRule(rule.id, { conditionValue: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.conditionValue), true)} />
+                              {ruleErrors?.conditionValue ? <div className={inlineErrorClass}>{ruleErrors.conditionValue}</div> : null}
+                            </div>
+                            <div><label className="text-muted-foreground">Condition Asset</label><input value={rule.conditionAsset} onChange={(event) => updateRule(rule.id, { conditionAsset: event.target.value })} className={editorFieldClass(false, true)} /></div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                            <div><label className="text-muted-foreground">Action</label><select value={rule.actionType} onChange={(event) => updateRule(rule.id, { actionType: event.target.value })} className={editorFieldClass(false, true)}>{ACTION_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div>
+                            <div>
+                              <label className="text-muted-foreground">Percent</label>
+                              <input value={rule.actionPercent} onChange={(event) => updateRule(rule.id, { actionPercent: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionPercent), true)} />
+                              {ruleErrors?.actionPercent ? <div className={inlineErrorClass}>{ruleErrors.actionPercent}</div> : null}
+                            </div>
+                            <div>
+                              <label className="text-muted-foreground">Action Asset</label>
+                              <input value={rule.actionAsset} onChange={(event) => updateRule(rule.id, { actionAsset: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionAsset), true)} />
+                              {ruleErrors?.actionAsset ? <div className={inlineErrorClass}>{ruleErrors.actionAsset}</div> : null}
+                            </div>
+                            <div>
+                              <label className="text-muted-foreground">From</label>
+                              <input value={rule.actionFrom} onChange={(event) => updateRule(rule.id, { actionFrom: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionFrom), true)} />
+                              {ruleErrors?.actionFrom ? <div className={inlineErrorClass}>{ruleErrors.actionFrom}</div> : null}
+                            </div>
+                            <div>
+                              <label className="text-muted-foreground">To</label>
+                              <input value={rule.actionTo} onChange={(event) => updateRule(rule.id, { actionTo: event.target.value })} className={editorFieldClass(Boolean(ruleErrors?.actionTo), true)} />
+                              {ruleErrors?.actionTo ? <div className={inlineErrorClass}>{ruleErrors.actionTo}</div> : null}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </>
         )}
