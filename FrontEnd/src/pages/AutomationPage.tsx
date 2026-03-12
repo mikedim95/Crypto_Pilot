@@ -5,7 +5,6 @@ import { useBacktests, useStrategies, useStrategyRunDetails, useStrategyRuns } f
 import type {
   BacktestCreateRequest,
   PortfolioAccountType,
-  StrategyCompositionMode,
   StrategyConfig,
   StrategyMode,
 } from "@/types/api";
@@ -50,10 +49,8 @@ interface StrategyDraft {
   executionMode: StrategyMode;
   scheduleInterval: string;
   isEnabled: boolean;
-  compositionMode: StrategyCompositionMode;
   baseStrategiesCsv: string;
   strategyWeightRows: DraftStrategyWeightRow[];
-  autoStrategyUsage: boolean;
   selectionConfig: {
     minStrategyScore: string;
     maxActiveStrategies: string;
@@ -123,8 +120,6 @@ interface DraftValidationErrors {
   rules: Record<string, DraftRuleErrors>;
 }
 
-const MODE_OPTIONS: StrategyMode[] = ["manual", "semi_auto", "auto"];
-const COMPOSITION_MODE_OPTIONS: StrategyCompositionMode[] = ["manual", "automatic"];
 const INDICATOR_OPTIONS = [
   "volatility",
   "btc_dominance",
@@ -150,6 +145,43 @@ const TURNOVER_OPTIONS = ["", "low", "medium", "high"];
 const STABLE_EXPOSURE_OPTIONS = ["", "low", "medium", "high"];
 const SCHEDULE_PRESET_OPTIONS = ["30m", "1h", "4h", "1d"];
 const SCHEDULE_INTERVAL_PATTERN = /^\d+(m|h|d)$/;
+const BASIC_STRATEGY_IDS = new Set<string>([
+  "mean-reversion",
+  "periodic-rebalancing",
+  "relative-strength-rotation",
+  "drawdown-protection",
+  "volatility-hedge",
+  "btc-dominance-rotation",
+  "momentum-rotation",
+]);
+
+const MODE_OPTIONS: StrategyMode[] = ["manual", "hybrid", "automatic"];
+const MODE_HELPER_TEXT: Record<StrategyMode, string> = {
+  manual: "You choose exactly which base strategies are used.",
+  hybrid: "You choose the allowed strategies; the engine adjusts usage dynamically.",
+  automatic: "The engine selects strategies dynamically from the full base strategy catalog.",
+};
+
+function normalizeDraftExecutionMode(strategy: StrategyConfig): StrategyMode {
+  const raw = String(strategy.executionMode ?? "manual").trim().toLowerCase();
+  if (raw === "semi_auto" || raw === "hybrid") return "hybrid";
+  if (raw === "auto" || raw === "automatic") {
+    return (strategy.baseStrategies?.length ?? 0) > 0 ? "hybrid" : "automatic";
+  }
+  return "manual";
+}
+
+function isAutomaticMode(mode: StrategyMode): boolean {
+  return mode === "automatic";
+}
+
+function isHybridMode(mode: StrategyMode): boolean {
+  return mode === "hybrid";
+}
+
+function isManualMode(mode: StrategyMode): boolean {
+  return mode === "manual";
+}
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -231,12 +263,12 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
   errors.guards.maxTradesPerCycle = validateOptionalNumericField(
     draft.guards.maxTradesPerCycle,
     "Max trades",
-    { integer: true, min: 0 }
+    { integer: true, min: 1 }
   );
   errors.guards.minTradeNotional = validateOptionalNumericField(
     draft.guards.minTradeNotional,
     "Min notional",
-    { min: 0 }
+    { min: 0.0000001 }
   );
   errors.guards.cashReservePct = validateOptionalNumericField(
     draft.guards.cashReservePct,
@@ -245,6 +277,8 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
   );
 
   let hasAnyBaseSymbol = false;
+  const seenBaseSymbols = new Set<string>();
+  let baseAllocationPercentTotal = 0;
   for (const row of draft.baseAllocationRows) {
     const rowErrors: { symbol?: string; percent?: string } = {};
     const symbol = row.symbol.trim().toUpperCase();
@@ -254,6 +288,10 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
       hasAnyBaseSymbol = true;
       if (!/^[A-Z0-9_]+$/.test(symbol)) {
         rowErrors.symbol = "Use uppercase letters/numbers only.";
+      } else if (seenBaseSymbols.has(symbol)) {
+        rowErrors.symbol = "Duplicate symbol in base allocation.";
+      } else {
+        seenBaseSymbols.add(symbol);
       }
     }
 
@@ -269,6 +307,8 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
         rowErrors.percent = "Percent must be numeric.";
       } else if (parsedPercent < 0) {
         rowErrors.percent = "Percent cannot be negative.";
+      } else {
+        baseAllocationPercentTotal += parsedPercent;
       }
     }
 
@@ -279,6 +319,8 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
 
   if (!hasAnyBaseSymbol) {
     errors.baseAllocation = "Add at least one base allocation symbol.";
+  } else if (Math.abs(baseAllocationPercentTotal - 100) > 0.0001) {
+    errors.baseAllocation = "Base allocation must total exactly 100%.";
   }
 
   const disabledAssets = draft.disabledAssetsCsv
@@ -290,68 +332,101 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
     errors.disabledAssetsCsv = `Invalid disabled asset: ${invalidDisabledAsset}`;
   }
 
+  const executionMode = draft.executionMode;
   const baseStrategies = parseStrategyIdCsv(draft.baseStrategiesCsv);
+  const requiresAllowedPool = isManualMode(executionMode) || isHybridMode(executionMode);
   const invalidBaseStrategy = baseStrategies.find((value) => !/^[a-z0-9-]+$/.test(value));
   if (invalidBaseStrategy) {
     errors.composition.baseStrategiesCsv = `Invalid base strategy id: ${invalidBaseStrategy}`;
   }
 
-  if ((draft.compositionMode === "automatic" || draft.autoStrategyUsage || baseStrategies.length > 0) && baseStrategies.length === 0) {
-    errors.composition.baseStrategiesCsv = "Select at least one base strategy for composition.";
+  if (requiresAllowedPool && baseStrategies.length === 0) {
+    errors.composition.baseStrategiesCsv =
+      executionMode === "manual"
+        ? "Select at least one base strategy."
+        : "Select at least one allowed base strategy.";
   }
 
-  errors.composition.minStrategyScore = validateOptionalNumericField(
-    draft.selectionConfig.minStrategyScore,
-    "Min strategy score",
-    { min: 0, max: 1 }
-  );
-  errors.composition.maxActiveStrategies = validateOptionalNumericField(
-    draft.selectionConfig.maxActiveStrategies,
-    "Max active strategies",
-    { integer: true, min: 1, max: 20 }
-  );
-  errors.composition.maxWeightShiftPerCycle = validateOptionalNumericField(
-    draft.selectionConfig.maxWeightShiftPerCycle,
-    "Max weight shift per cycle",
-    { min: 0, max: 100 }
-  );
-  errors.composition.strategyCooldownHours = validateOptionalNumericField(
-    draft.selectionConfig.strategyCooldownHours,
-    "Strategy cooldown hours",
-    { integer: true, min: 0, max: 720 }
-  );
-  errors.composition.minActiveDurationHours = validateOptionalNumericField(
-    draft.selectionConfig.minActiveDurationHours,
-    "Min active duration hours",
-    { integer: true, min: 0, max: 720 }
-  );
-  errors.composition.scorePower = validateOptionalNumericField(draft.weightAdjustment.scorePower, "Score power", {
-    min: 0.1,
-    max: 5,
-  });
-  errors.composition.minWeightPctPerStrategy = validateOptionalNumericField(
-    draft.weightAdjustment.minWeightPctPerStrategy,
-    "Min weight %",
-    { min: 0, max: 100 }
-  );
-  errors.composition.maxWeightPctPerStrategy = validateOptionalNumericField(
-    draft.weightAdjustment.maxWeightPctPerStrategy,
-    "Max weight %",
-    { min: 0, max: 100 }
-  );
+  const usesAutomationControls = !isManualMode(executionMode);
+  if (usesAutomationControls) {
+    errors.composition.minStrategyScore = validateOptionalNumericField(
+      draft.selectionConfig.minStrategyScore,
+      "Min strategy score",
+      { min: 0, max: 1 }
+    );
+    errors.composition.maxActiveStrategies = validateOptionalNumericField(
+      draft.selectionConfig.maxActiveStrategies,
+      "Max active strategies",
+      { integer: true, min: 1, max: 20 }
+    );
+    errors.composition.maxWeightShiftPerCycle = validateOptionalNumericField(
+      draft.selectionConfig.maxWeightShiftPerCycle,
+      "Max weight shift per cycle",
+      { min: 0, max: 100 }
+    );
+    errors.composition.strategyCooldownHours = validateOptionalNumericField(
+      draft.selectionConfig.strategyCooldownHours,
+      "Strategy cooldown hours",
+      { integer: true, min: 0, max: 720 }
+    );
+    errors.composition.minActiveDurationHours = validateOptionalNumericField(
+      draft.selectionConfig.minActiveDurationHours,
+      "Min active duration hours",
+      { integer: true, min: 0, max: 720 }
+    );
+    errors.composition.scorePower = validateOptionalNumericField(draft.weightAdjustment.scorePower, "Score power", {
+      min: 0.1,
+      max: 5,
+    });
+    errors.composition.minWeightPctPerStrategy = validateOptionalNumericField(
+      draft.weightAdjustment.minWeightPctPerStrategy,
+      "Min weight %",
+      { min: 0, max: 100 }
+    );
+    errors.composition.maxWeightPctPerStrategy = validateOptionalNumericField(
+      draft.weightAdjustment.maxWeightPctPerStrategy,
+      "Max weight %",
+      { min: 0, max: 100 }
+    );
 
-  const minWeight = draft.weightAdjustment.minWeightPctPerStrategy.trim()
-    ? Number(draft.weightAdjustment.minWeightPctPerStrategy)
-    : undefined;
-  const maxWeight = draft.weightAdjustment.maxWeightPctPerStrategy.trim()
-    ? Number(draft.weightAdjustment.maxWeightPctPerStrategy)
-    : undefined;
-  if (typeof minWeight === "number" && typeof maxWeight === "number" && Number.isFinite(minWeight) && Number.isFinite(maxWeight) && minWeight > maxWeight) {
-    errors.composition.maxWeightPctPerStrategy = "Max weight % must be >= Min weight %.";
-  }
+    const minWeight = draft.weightAdjustment.minWeightPctPerStrategy.trim()
+      ? Number(draft.weightAdjustment.minWeightPctPerStrategy)
+      : undefined;
+    const maxWeight = draft.weightAdjustment.maxWeightPctPerStrategy.trim()
+      ? Number(draft.weightAdjustment.maxWeightPctPerStrategy)
+      : undefined;
+    if (
+      typeof minWeight === "number" &&
+      typeof maxWeight === "number" &&
+      Number.isFinite(minWeight) &&
+      Number.isFinite(maxWeight) &&
+      minWeight > maxWeight
+    ) {
+      errors.composition.maxWeightPctPerStrategy = "Max weight % must be >= Min weight %.";
+    }
 
-  if (draft.selectionConfig.fallbackStrategy.trim() && !/^[a-z0-9-]+$/i.test(draft.selectionConfig.fallbackStrategy.trim())) {
-    errors.composition.fallbackStrategy = "Fallback strategy must use letters, numbers, and hyphens.";
+    const fallbackStrategy = draft.selectionConfig.fallbackStrategy.trim().toLowerCase();
+    if (fallbackStrategy && !/^[a-z0-9-]+$/i.test(fallbackStrategy)) {
+      errors.composition.fallbackStrategy = "Fallback strategy must use letters, numbers, and hyphens.";
+    }
+    if (fallbackStrategy && requiresAllowedPool && !baseStrategies.includes(fallbackStrategy)) {
+      errors.composition.fallbackStrategy = "Fallback strategy must be one of the selected/allowed base strategies.";
+    }
+    if (fallbackStrategy && isAutomaticMode(executionMode) && !BASIC_STRATEGY_IDS.has(fallbackStrategy)) {
+      errors.composition.fallbackStrategy = "Fallback strategy must be a valid basic strategy id.";
+    }
+
+    const maxActiveStrategies = draft.selectionConfig.maxActiveStrategies.trim()
+      ? Number(draft.selectionConfig.maxActiveStrategies)
+      : undefined;
+    if (typeof maxActiveStrategies === "number" && Number.isFinite(maxActiveStrategies)) {
+      if (isAutomaticMode(executionMode) && maxActiveStrategies > BASIC_STRATEGY_IDS.size) {
+        errors.composition.maxActiveStrategies = `Max active strategies cannot exceed ${BASIC_STRATEGY_IDS.size}.`;
+      }
+      if (requiresAllowedPool && baseStrategies.length > 0 && maxActiveStrategies > baseStrategies.length) {
+        errors.composition.maxActiveStrategies = "Max active strategies cannot exceed selected/allowed base strategies.";
+      }
+    }
   }
 
   const seenWeightStrategies = new Set<string>();
@@ -389,9 +464,20 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
       errors.strategyWeightRows[row.id] = rowErrors;
     }
   });
+  if (requiresAllowedPool) {
+    const invalidWeightRow = draft.strategyWeightRows.find((row) => {
+      const strategyId = row.strategyId.trim().toLowerCase();
+      return strategyId.length > 0 && !baseStrategies.includes(strategyId);
+    });
+    if (invalidWeightRow) {
+      errors.composition.strategyWeightRows = "Strategy weight rows must reference selected/allowed base strategies.";
+    }
+  }
 
-  if (draft.compositionMode === "manual" && baseStrategies.length > 0 && draft.strategyWeightRows.length === 0) {
-    errors.composition.strategyWeightRows = "Add strategy weights for manual composition mode.";
+  const minStable = draft.guards.minStablecoinPct.trim() ? Number(draft.guards.minStablecoinPct) : 0;
+  const cashReserve = draft.guards.cashReservePct.trim() ? Number(draft.guards.cashReservePct) : 0;
+  if (Number.isFinite(minStable) && Number.isFinite(cashReserve) && minStable + cashReserve > 100) {
+    errors.guards.cashReservePct = "Min stable % + cash reserve % cannot exceed 100%.";
   }
 
   const seenRuleIds = new Set<string>();
@@ -562,6 +648,11 @@ function toOptionalInteger(value: string, label: string): number | undefined {
 }
 
 function strategyToDraft(strategy: StrategyConfig): StrategyDraft {
+  const normalizedMode = normalizeDraftExecutionMode(strategy);
+  const normalizedBaseStrategies =
+    isAutomaticMode(normalizedMode) && (strategy.baseStrategies?.length ?? 0) === 0
+      ? []
+      : strategy.baseStrategies ?? [];
   const allocationRows = Object.entries(strategy.baseAllocation)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([symbol, percent]) => ({
@@ -596,13 +687,11 @@ function strategyToDraft(strategy: StrategyConfig): StrategyDraft {
   return {
     name: strategy.name,
     description: strategy.description ?? "",
-    executionMode: strategy.executionMode,
+    executionMode: normalizedMode,
     scheduleInterval: strategy.scheduleInterval,
     isEnabled: strategy.isEnabled,
-    compositionMode: strategy.compositionMode ?? "manual",
-    baseStrategiesCsv: (strategy.baseStrategies ?? []).join(", "),
+    baseStrategiesCsv: normalizedBaseStrategies.join(", "),
     strategyWeightRows,
-    autoStrategyUsage: Boolean(strategy.autoStrategyUsage),
     selectionConfig: {
       minStrategyScore:
         typeof strategy.strategySelectionConfig?.minStrategyScore === "number"
@@ -689,6 +778,10 @@ function draftToPayload(draft: StrategyDraft, strategyId: string): unknown {
   if (Object.keys(baseAllocation).length === 0) {
     throw new Error("At least one base allocation entry is required.");
   }
+  const baseAllocationTotal = Object.values(baseAllocation).reduce((sum, value) => sum + value, 0);
+  if (Math.abs(baseAllocationTotal - 100) > 0.0001) {
+    throw new Error("Base allocation must total exactly 100%.");
+  }
 
   const rules = draft.rules.map((rule, index) => {
     const priority = Number(rule.priority);
@@ -754,7 +847,7 @@ function draftToPayload(draft: StrategyDraft, strategyId: string): unknown {
     .map((value) => value.trim().toUpperCase())
     .filter(Boolean);
 
-  const baseStrategies = parseStrategyIdCsv(draft.baseStrategiesCsv);
+  const baseStrategies = isAutomaticMode(draft.executionMode) ? [] : parseStrategyIdCsv(draft.baseStrategiesCsv);
 
   const strategyWeights = draft.strategyWeightRows.reduce<Record<string, number>>((acc, row) => {
     const strategyRef = row.strategyId.trim().toLowerCase();
@@ -785,10 +878,11 @@ function draftToPayload(draft: StrategyDraft, strategyId: string): unknown {
     isEnabled: draft.isEnabled,
     scheduleInterval: draft.scheduleInterval.trim().toLowerCase(),
     disabledAssets,
-    compositionMode: draft.compositionMode,
+    compositionMode: draft.executionMode === "manual" ? "manual" : "automatic",
     baseStrategies,
+    allowedBaseStrategies: baseStrategies,
     strategyWeights,
-    autoStrategyUsage: draft.autoStrategyUsage,
+    autoStrategyUsage: draft.executionMode !== "manual",
     strategySelectionConfig: {
       minStrategyScore: toOptionalNumber(draft.selectionConfig.minStrategyScore, "minStrategyScore"),
       maxActiveStrategies: toOptionalInteger(draft.selectionConfig.maxActiveStrategies, "maxActiveStrategies"),
@@ -822,23 +916,22 @@ function toStrategyId(name: string): string {
 }
 
 function createUsableStrategyDraft(baseStrategyIds: string[]): StrategyDraft {
+  const defaultAllowedStrategies = baseStrategyIds.slice(0, Math.min(3, baseStrategyIds.length));
   return {
     name: "",
     description: "",
-    executionMode: "semi_auto",
+    executionMode: "hybrid",
     scheduleInterval: "1h",
     isEnabled: false,
-    compositionMode: "automatic",
-    baseStrategiesCsv: baseStrategyIds.join(", "),
+    baseStrategiesCsv: defaultAllowedStrategies.join(", "),
     strategyWeightRows: [],
-    autoStrategyUsage: true,
     selectionConfig: {
       minStrategyScore: "",
       maxActiveStrategies: "",
       maxWeightShiftPerCycle: "",
       strategyCooldownHours: "",
       minActiveDurationHours: "",
-      fallbackStrategy: baseStrategyIds[0] ?? "",
+      fallbackStrategy: defaultAllowedStrategies[0] ?? "",
     },
     weightAdjustment: {
       scorePower: "",
@@ -861,7 +954,7 @@ function createUsableStrategyDraft(baseStrategyIds: string[]): StrategyDraft {
   };
 }
 
-export function AutomationPage() {
+export function AutomationPage({ accountType }: AutomationPageProps) {
   const queryClient = useQueryClient();
   const [isEditorModalOpen, setIsEditorModalOpen] = useState(false);
   const [isRunDetailsModalOpen, setIsRunDetailsModalOpen] = useState(false);
@@ -884,6 +977,7 @@ export function AutomationPage() {
   const [draftStrategyId, setDraftStrategyId] = useState("");
   const [draftDirty, setDraftDirty] = useState(false);
   const [editorMode, setEditorMode] = useState<"edit" | "create">("edit");
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
 
   const today = new Date();
   const defaultEnd = today.toISOString().slice(0, 10);
@@ -897,11 +991,11 @@ export function AutomationPage() {
   const [slippagePct, setSlippagePct] = useState("0.001");
 
   const readOnlyStrategies = useMemo(
-    () => strategies.filter((strategy) => !strategy.baseStrategies || strategy.baseStrategies.length === 0),
+    () => strategies.filter((strategy) => BASIC_STRATEGY_IDS.has(strategy.id.toLowerCase())),
     [strategies]
   );
   const usableStrategies = useMemo(
-    () => strategies.filter((strategy) => (strategy.baseStrategies?.length ?? 0) > 0),
+    () => strategies.filter((strategy) => !BASIC_STRATEGY_IDS.has(strategy.id.toLowerCase())),
     [strategies]
   );
 
@@ -943,14 +1037,6 @@ export function AutomationPage() {
         .sort((left, right) => left.name.localeCompare(right.name)),
     [readOnlyStrategies]
   );
-  const baseStrategyById = useMemo(
-    () =>
-      readOnlyStrategies.reduce<Map<string, StrategyConfig>>((acc, strategy) => {
-        acc.set(strategy.id, strategy);
-        return acc;
-      }, new Map<string, StrategyConfig>()),
-    [readOnlyStrategies]
-  );
   const selectedBaseStrategyIds = useMemo(
     () => parseStrategyIdCsv(draft?.baseStrategiesCsv ?? ""),
     [draft?.baseStrategiesCsv]
@@ -965,14 +1051,34 @@ export function AutomationPage() {
     return `${first} +${selectedBaseStrategyIds.length - 1}`;
   }, [selectedBaseStrategyIds, strategyNameById]);
   const strategyDropdownOptions = useMemo(() => {
-    const preferredIds = selectedBaseStrategyIds.length > 0 ? selectedBaseStrategyIds : baseStrategyOptions.map((item) => item.id);
+    const preferredIds = isAutomaticMode(draft?.executionMode ?? "manual")
+      ? baseStrategyOptions.map((item) => item.id)
+      : selectedBaseStrategyIds.length > 0
+        ? selectedBaseStrategyIds
+        : baseStrategyOptions.map((item) => item.id);
     const normalizedIds = Array.from(new Set(preferredIds)).sort((left, right) => left.localeCompare(right));
 
     return normalizedIds.map((strategyId) => ({
       id: strategyId,
       name: strategyNameById.get(strategyId) ?? strategyId,
     }));
-  }, [baseStrategyOptions, selectedBaseStrategyIds, strategyNameById]);
+  }, [baseStrategyOptions, draft?.executionMode, selectedBaseStrategyIds, strategyNameById]);
+  const formatUsedBaseStrategiesSummary = (strategy: StrategyConfig): string => {
+    const mode = normalizeDraftExecutionMode(strategy);
+    if (isAutomaticMode(mode)) {
+      return "Full basic strategy catalog";
+    }
+
+    const strategyIds = Array.from(
+      new Set((strategy.baseStrategies ?? []).map((strategyId) => strategyId.trim().toLowerCase()).filter(Boolean))
+    );
+    if (strategyIds.length === 0) {
+      return "--";
+    }
+
+    const first = strategyNameById.get(strategyIds[0]) ?? strategyIds[0];
+    return strategyIds.length === 1 ? first : `${first} +${strategyIds.length - 1}`;
+  };
 
   useEffect(() => {
     if (!selectedStrategy) return;
@@ -1096,38 +1202,6 @@ export function AutomationPage() {
     mutationFn: (payload: BacktestCreateRequest) => backendApi.createBacktest(payload),
     onSuccess: async (result) => {
       setErrorMessage("");
-      setMessage(`Created strategy ${result.strategy.name}.`);
-      setSelectedStrategyId(result.strategy.id);
-      setDraft(strategyToDraft(result.strategy));
-      setDraftStrategyId(result.strategy.id);
-      setDraftDirty(false);
-      setEditorMode("edit");
-      await invalidateAll();
-    },
-    onError: (error) => {
-      setMessage("");
-      setErrorMessage(error instanceof Error ? error.message : "Unable to create strategy.");
-    },
-  });
-
-  const deleteStrategyMutation = useMutation({
-    mutationFn: (strategyId: string) => backendApi.deleteStrategy(strategyId),
-    onSuccess: async () => {
-      setErrorMessage("");
-      setMessage("Strategy deleted.");
-      setSelectedStrategyId("");
-      await invalidateAll();
-    },
-    onError: (error) => {
-      setMessage("");
-      setErrorMessage(error instanceof Error ? error.message : "Unable to delete strategy.");
-    },
-  });
-
-  const backtestMutation = useMutation({
-    mutationFn: (payload: BacktestCreateRequest) => backendApi.createBacktest(payload),
-    onSuccess: async (result) => {
-      setErrorMessage("");
       setMessage(`Backtest ${result.backtestRun.id} started.`);
       await invalidateAll();
     },
@@ -1143,12 +1217,10 @@ export function AutomationPage() {
     saveStrategyMutation.isPending ||
     createStrategyMutation.isPending ||
     deleteStrategyMutation.isPending ||
-    backtestMutation.isPending ||
-    updateDemoBalanceMutation.isPending;
+    backtestMutation.isPending;
 
   const draftValidation = useMemo(() => (draft ? validateDraft(draft) : null), [draft]);
   const draftHasErrors = draftValidation ? hasDraftValidationErrors(draftValidation) : false;
-  const showAdvancedOptions = editorMode === "edit" || showCreateAdvancedOptions;
 
   const editorFieldClass = (hasError?: boolean, compact?: boolean): string =>
     cn(
@@ -1197,20 +1269,10 @@ export function AutomationPage() {
       const selected = parseStrategyIdCsv(previous.baseStrategiesCsv);
       const exists = selected.includes(strategyId);
       const next = exists ? selected.filter((item) => item !== strategyId) : [...selected, strategyId];
-      const updatedDraft: StrategyDraft = {
+      return {
         ...previous,
         baseStrategiesCsv: toStrategyIdCsv(next),
       };
-
-      if (updatedDraft.compositionMode !== "automatic") {
-        return updatedDraft;
-      }
-
-      const selectedStrategies = next
-        .map((id) => baseStrategyById.get(id))
-        .filter((item): item is StrategyConfig => Boolean(item));
-
-      return applyAutomaticPrefill(updatedDraft, selectedStrategies);
     });
   };
 
@@ -1310,6 +1372,7 @@ export function AutomationPage() {
     if (editorMode === "create") {
       setDraft(createUsableStrategyDraft(readOnlyStrategies.map((strategy) => strategy.id)));
       setDraftDirty(false);
+      setShowAdvancedOptions(false);
       return;
     }
     if (!selectedStrategy) return;
@@ -1349,6 +1412,7 @@ export function AutomationPage() {
   const openStrategyEditor = (strategyId: string): void => {
     setEditorMode("edit");
     setSelectedStrategyId(strategyId);
+    setShowAdvancedOptions(false);
     setIsEditorModalOpen(true);
   };
 
@@ -1357,11 +1421,12 @@ export function AutomationPage() {
     setDraft(createUsableStrategyDraft(readOnlyStrategies.map((strategy) => strategy.id)));
     setDraftStrategyId("");
     setDraftDirty(false);
+    setShowAdvancedOptions(false);
     setIsEditorModalOpen(true);
   };
 
   const closeStrategyEditor = (): void => {
-    setShowCreateAdvancedOptions(false);
+    setShowAdvancedOptions(false);
     setIsEditorModalOpen(false);
   };
 
@@ -1413,13 +1478,13 @@ export function AutomationPage() {
               disabled={busy || readOnlyStrategies.length === 0}
               className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60"
             >
-              Create Usable Strategy
+              Create Strategy
             </button>
           </div>
           <table className="w-full">
             <thead>
               <tr className="border-b border-border">
-                {["Name", "Uses Basic", "Mode", "Enabled", "Interval", "Actions"].map((heading) => (
+                {["Name", "Used Basic Strategies", "Mode", "Enabled", "Interval", "Actions"].map((heading) => (
                   <th key={heading} className="py-3 px-4 text-[10px] font-mono uppercase tracking-wider text-muted-foreground text-right first:text-left">{heading}</th>
                 ))}
               </tr>
@@ -1437,21 +1502,20 @@ export function AutomationPage() {
                     onClick={() => setSelectedStrategyId(strategy.id)}
                   >
                     <td className="py-3 px-4 text-left text-xs font-mono text-foreground">{strategy.name}</td>
-                    <td className="py-3 px-4 text-right text-xs font-mono text-muted-foreground">{(strategy.baseStrategies ?? []).join(", ") || "--"}</td>
-                    <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{strategy.executionMode}</td>
+                    <td className="py-3 px-4 text-right text-xs font-mono text-muted-foreground">{formatUsedBaseStrategiesSummary(strategy)}</td>
+                    <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{normalizeDraftExecutionMode(strategy)}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono"><span className={strategy.isEnabled ? "text-positive" : "text-muted-foreground"}>{strategy.isEnabled ? "Yes" : "No"}</span></td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{strategy.scheduleInterval}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSelectedStrategyId(strategy.id);
-                          setMessage(`Using strategy ${strategy.name}.`);
-                          setErrorMessage("");
+                          runNowMutation.mutate(strategy.id);
                         }}
+                        disabled={busy}
                         className="px-2 py-1 mr-1 rounded border border-border text-[11px] font-mono text-foreground hover:bg-secondary"
                       >
-                        Use
+                        Run Now
                       </button>
                       <button
                         onClick={(event) => {
@@ -1521,7 +1585,7 @@ export function AutomationPage() {
               <div className="flex gap-2">
                 <button onClick={closeStrategyEditor} className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary">Close</button>
                 <button onClick={handleResetDraft} disabled={busy || !draftDirty} className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary disabled:opacity-60">Reset</button>
-                <button onClick={handleSaveStrategy} disabled={busy || !draftDirty || !draft || draftHasErrors} className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60">{editorMode === "create" ? "Create Strategy" : "Save Strategy"}</button>
+                <button onClick={handleSaveStrategy} disabled={busy || !draftDirty || !draft || draftHasErrors} className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60">{editorMode === "create" ? "Create Strategy" : "Save Changes"}</button>
               </div>
             </div>
         {draftHasErrors ? <div className="text-xs font-mono text-negative">Fix inline validation errors to enable save.</div> : null}
@@ -1535,12 +1599,6 @@ export function AutomationPage() {
                 <label className="text-muted-foreground">Name</label>
                 <input value={draft.name} onChange={(event) => updateDraft((prev) => ({ ...prev, name: event.target.value }))} className={editorFieldClass(Boolean(draftValidation?.name))} />
                 {draftValidation?.name ? <div className={inlineErrorClass}>{draftValidation.name}</div> : null}
-              </div>
-              <div>
-                <label className="text-muted-foreground">Execution Mode</label>
-                <select value={draft.executionMode} onChange={(event) => updateDraft((prev) => ({ ...prev, executionMode: event.target.value as StrategyMode }))} className={editorFieldClass(false)}>
-                  {MODE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
               </div>
               <div className="md:col-span-2">
                 <label className="text-muted-foreground">Description</label>
@@ -1576,91 +1634,79 @@ export function AutomationPage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Composition</div>
-                  {editorMode === "create" ? (
-                    <div className="mt-1 text-xs text-muted-foreground">Keep defaults or expand to customize strategy behavior.</div>
-                  ) : null}
+                  <div className="mt-1 text-xs text-muted-foreground">Keep defaults or expand to customize strategy behavior.</div>
                 </div>
-                {editorMode === "create" ? (
-                  <button
-                    onClick={() => setShowCreateAdvancedOptions((previous) => !previous)}
-                    className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary transition-all duration-300 hover:-translate-y-0.5"
-                  >
-                    {showCreateAdvancedOptions ? "Hide Advanced" : "Show Advanced"}
-                  </button>
-                ) : null}
+                <button
+                  onClick={() => setShowAdvancedOptions((previous) => !previous)}
+                  className="px-3 py-1.5 rounded-md border border-border text-xs font-mono text-foreground hover:bg-secondary transition-all duration-300 hover:-translate-y-0.5"
+                >
+                  {showAdvancedOptions ? "Hide Advanced" : "Show Advanced"}
+                </button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
                 <div>
-                  <label className="text-muted-foreground">Composition Mode</label>
+                  <label className="text-muted-foreground">Execution Mode</label>
                   <select
-                    value={draft.compositionMode}
-                    onChange={(event) =>
-                      updateDraft((prev) => {
-                        const compositionMode = event.target.value as StrategyCompositionMode;
-                        const updated: StrategyDraft = {
-                          ...prev,
-                          compositionMode,
-                          autoStrategyUsage: compositionMode === "automatic" ? true : prev.autoStrategyUsage,
-                        };
-
-                        if (compositionMode !== "automatic") {
-                          return updated;
-                        }
-
-                        const selectedIds = parseStrategyIdCsv(updated.baseStrategiesCsv);
-                        const selectedStrategies = selectedIds
-                          .map((id) => baseStrategyById.get(id))
-                          .filter((item): item is StrategyConfig => Boolean(item));
-                        return applyAutomaticPrefill(updated, selectedStrategies);
-                      })
-                    }
+                    value={draft.executionMode}
+                    onChange={(event) => updateDraft((prev) => ({ ...prev, executionMode: event.target.value as StrategyMode }))}
                     className={editorFieldClass(false)}
                   >
-                    {COMPOSITION_MODE_OPTIONS.map((option) => (
+                    {MODE_OPTIONS.map((option) => (
                       <option key={option} value={option}>
                         {option}
                       </option>
                     ))}
                   </select>
+                  <div className="mt-1 text-[11px] text-muted-foreground">{MODE_HELPER_TEXT[draft.executionMode]}</div>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="text-muted-foreground">Selected Base Strategies</label>
-                  <details className="relative mt-1">
-                    <summary
-                      className={cn(
-                        "w-full rounded border bg-secondary px-2 py-2 text-foreground outline-none cursor-pointer list-none [&::-webkit-details-marker]:hidden",
-                        draftValidation?.composition.baseStrategiesCsv ? "border-negative" : "border-border"
-                      )}
-                    >
-                      {selectedBaseStrategiesLabel}
-                    </summary>
-                    <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded border border-border bg-card p-2">
-                      {baseStrategyOptions.length === 0 ? (
-                        <div className="text-xs font-mono text-muted-foreground">No base strategies available.</div>
-                      ) : (
-                        <div className="space-y-1">
-                          {baseStrategyOptions.map((option) => {
-                            const checked = selectedBaseStrategyIds.includes(option.id);
-                            return (
-                              <label key={option.id} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-secondary/30">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleBaseStrategySelection(option.id)}
-                                  className="h-4 w-4"
-                                />
-                                <span className="text-xs font-mono text-foreground">{option.name}</span>
-                                <span className="text-[11px] font-mono text-muted-foreground">({option.id})</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
+                  {isAutomaticMode(draft.executionMode) ? (
+                    <div className="rounded border border-border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground">
+                      Automatic mode uses the full basic strategy catalog and dynamically selects active strategies based on market conditions and configured constraints.
                     </div>
-                  </details>
-                  {draftValidation?.composition.baseStrategiesCsv ? (
-                    <div className={inlineErrorClass}>{draftValidation.composition.baseStrategiesCsv}</div>
-                  ) : null}
+                  ) : (
+                    <>
+                      <label className="text-muted-foreground">
+                        {isManualMode(draft.executionMode) ? "Selected Base Strategies" : "Allowed Base Strategies"}
+                      </label>
+                      <details className="relative mt-1">
+                        <summary
+                          className={cn(
+                            "w-full rounded border bg-secondary px-2 py-2 text-foreground outline-none cursor-pointer list-none [&::-webkit-details-marker]:hidden",
+                            draftValidation?.composition.baseStrategiesCsv ? "border-negative" : "border-border"
+                          )}
+                        >
+                          {selectedBaseStrategiesLabel}
+                        </summary>
+                        <div className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded border border-border bg-card p-2">
+                          {baseStrategyOptions.length === 0 ? (
+                            <div className="text-xs font-mono text-muted-foreground">No base strategies available.</div>
+                          ) : (
+                            <div className="space-y-1">
+                              {baseStrategyOptions.map((option) => {
+                                const checked = selectedBaseStrategyIds.includes(option.id);
+                                return (
+                                  <label key={option.id} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-secondary/30">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() => toggleBaseStrategySelection(option.id)}
+                                      className="h-4 w-4"
+                                    />
+                                    <span className="text-xs font-mono text-foreground">{option.name}</span>
+                                    <span className="text-[11px] font-mono text-muted-foreground">({option.id})</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                      {draftValidation?.composition.baseStrategiesCsv ? (
+                        <div className={inlineErrorClass}>{draftValidation.composition.baseStrategiesCsv}</div>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1671,28 +1717,6 @@ export function AutomationPage() {
                 )}
               >
                 <div className="space-y-3 pt-1">
-                  <div className="flex items-center gap-2 text-xs font-mono text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={draft.autoStrategyUsage}
-                      onChange={(event) =>
-                        updateDraft((prev) => {
-                          const autoStrategyUsage = event.target.checked;
-                          const updated: StrategyDraft = { ...prev, autoStrategyUsage };
-                          if (!autoStrategyUsage) return updated;
-
-                          const selectedIds = parseStrategyIdCsv(updated.baseStrategiesCsv);
-                          const selectedStrategies = selectedIds
-                            .map((id) => baseStrategyById.get(id))
-                            .filter((item): item is StrategyConfig => Boolean(item));
-                          return applyAutomaticPrefill(updated, selectedStrategies);
-                        })
-                      }
-                      className="h-4 w-4"
-                    />
-                    Auto Strategy Usage
-                  </div>
-
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Strategy Weights</div>
@@ -1759,7 +1783,9 @@ export function AutomationPage() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
+                  {!isManualMode(draft.executionMode) ? (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
                     <div>
                       <label className="text-muted-foreground">Min Strategy Score</label>
                       <input
@@ -1875,9 +1901,9 @@ export function AutomationPage() {
                         <div className={inlineErrorClass}>{draftValidation.composition.fallbackStrategy}</div>
                       ) : null}
                     </div>
-                  </div>
+                      </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-mono">
                     <div>
                       <label className="text-muted-foreground">Score Power</label>
                       <input
@@ -1929,7 +1955,9 @@ export function AutomationPage() {
                         <div className={inlineErrorClass}>{draftValidation.composition.maxWeightPctPerStrategy}</div>
                       ) : null}
                     </div>
-                  </div>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </div>
 
@@ -2050,13 +2078,7 @@ export function AutomationPage() {
               </div>
             </div>
 
-            <div
-              className={cn(
-                "overflow-hidden transition-all duration-500 ease-out",
-                showAdvancedOptions ? "max-h-[6000px] opacity-100" : "max-h-0 opacity-0"
-              )}
-            >
-              <div className="space-y-3">
+            <div className="space-y-3">
                 <div>
                   <label className="text-xs font-mono text-muted-foreground">Disabled Assets (comma separated)</label>
                   <input
@@ -2143,7 +2165,6 @@ export function AutomationPage() {
                     </div>
                   )}
                 </div>
-              </div>
             </div>
           </>
         )}

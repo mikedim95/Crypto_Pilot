@@ -118,7 +118,7 @@ export interface NicehashAssetBalance {
   btcRate: number | null;
 }
 
-export type StrategyMode = "manual" | "semi_auto" | "auto";
+export type StrategyMode = "manual" | "hybrid" | "automatic";
 export type StrategyCompositionMode = "manual" | "automatic";
 export type MarketRegime = "risk_on" | "neutral" | "risk_off" | "high_volatility";
 export type StrategyOperator = ">" | "<" | ">=" | "<=" | "==" | "!=";

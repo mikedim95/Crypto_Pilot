@@ -8,6 +8,7 @@ import { StrategyRepository } from "./strategy-repository.js";
 import { StrategyRunner } from "./strategy-runner.js";
 import { parseScheduleIntervalToMs } from "./allocation-utils.js";
 import { PortfolioAccountType } from "./types.js";
+import { isBasicStrategyId } from "./strategy-catalog.js";
 
 const scheduleSchema = z.object({
   scheduleInterval: z.string().regex(/^\d+(s|m|h|d)$/i),
@@ -140,7 +141,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
       return;
     }
 
-    if (!existing.baseStrategies || existing.baseStrategies.length === 0) {
+    if (isBasicStrategyId(existing.id)) {
       res.status(400).json({ message: "Base read-only strategies cannot be deleted." });
       return;
     }
