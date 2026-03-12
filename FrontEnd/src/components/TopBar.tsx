@@ -23,7 +23,7 @@ function formatUsdToken(value: number | undefined): string {
 
 export function TopBar({ accountType, onAccountTypeChange }: TopBarProps) {
   const queryClient = useQueryClient();
-  const { data, isPending } = useDashboardData();
+  const { data, isPending } = useDashboardData(accountType);
   const { data: demoAccountData, isPending: loadingDemoAccount } = useDemoAccountSettings();
   const [isDemoBalanceModalOpen, setIsDemoBalanceModalOpen] = useState(false);
   const [demoBalanceDraft, setDemoBalanceDraft] = useState("");
@@ -43,7 +43,7 @@ export function TopBar({ accountType, onAccountTypeChange }: TopBarProps) {
       setIsDemoBalanceModalOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["demo-account-settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard", "demo"] }),
         queryClient.invalidateQueries({ queryKey: ["strategy-runs"] }),
         queryClient.invalidateQueries({ queryKey: ["strategy-state"] }),
         queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan"] }),

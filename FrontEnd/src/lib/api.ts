@@ -80,7 +80,8 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const backendApi = {
-  getDashboard: () => apiRequest<DashboardResponse>("/api/dashboard"),
+  getDashboard: (accountType: PortfolioAccountType = "real") =>
+    apiRequest<DashboardResponse>(withQuery("/api/dashboard", { accountType })),
   getOrders: () => apiRequest<OrdersResponse>("/api/orders"),
   getMiningOverview: () => apiRequest<MiningOverviewResponse>("/api/mining/overview"),
   getNicehashOverview: () => apiRequest<NicehashOverviewResponse>("/api/mining/nicehash"),

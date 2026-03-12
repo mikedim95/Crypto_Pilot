@@ -9,7 +9,9 @@ import {
 } from "./binanceClient.js";
 import { getMiningOverviewData, getNicehashOverviewData } from "./miningService.js";
 import { getDashboardData, getOrdersData } from "./portfolioService.js";
+import type { DashboardResponse } from "./types.js";
 import { BacktestEngine } from "./strategy/backtest-engine.js";
+import { getDemoPortfolioState } from "./strategy/portfolio-state-service.js";
 import { StrategyRepository } from "./strategy/strategy-repository.js";
 import { StrategyRunner } from "./strategy/strategy-runner.js";
 import { StrategyScheduler } from "./strategy/strategy-scheduler.js";
@@ -29,6 +31,103 @@ const strategyRepository = new StrategyRepository(process.env.STRATEGY_STORE_PAT
 const strategyRunner = new StrategyRunner(strategyRepository);
 const backtestEngine = new BacktestEngine(strategyRepository);
 const strategyScheduler = new StrategyScheduler(strategyRepository, strategyRunner, schedulerPollMs);
+
+const DEMO_ASSET_NAMES: Record<string, string> = {
+  BTC: "Bitcoin",
+  ETH: "Ethereum",
+  BNB: "BNB",
+  SOL: "Solana",
+  XRP: "XRP",
+  ADA: "Cardano",
+  DOGE: "Dogecoin",
+  USDC: "USD Coin",
+  USDT: "Tether",
+  FDUSD: "First Digital USD",
+};
+
+function round(value: number, digits = 2): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function parseDashboardAccountType(req: Request): "real" | "demo" {
+  const rawValue = typeof req.query?.accountType === "string" ? req.query.accountType.trim().toLowerCase() : "real";
+  return rawValue === "demo" ? "demo" : "real";
+}
+
+function buildSparklineFromChange(price: number, change24h: number): number[] {
+  const previousPrice = Math.abs(100 + change24h) < 0.0001 ? price : price / (1 + change24h / 100);
+  return Array.from({ length: 20 }, (_, index) => {
+    const ratio = index / 19;
+    return round(previousPrice + (price - previousPrice) * ratio, 6);
+  });
+}
+
+async function getDemoDashboardData(demoCapital: number): Promise<DashboardResponse> {
+  const portfolio = await getDemoPortfolioState("USDC", demoCapital);
+  const generatedAt = portfolio.timestamp;
+  const assets = portfolio.assets.map((asset) => ({
+    id: asset.symbol.toLowerCase(),
+    symbol: asset.symbol,
+    name: DEMO_ASSET_NAMES[asset.symbol] ?? asset.symbol,
+    price: round(asset.price, 8),
+    change24h: round(asset.change24h ?? 0, 4),
+    volume24h: round(asset.volume24h ?? 0, 2),
+    marketCap: 0,
+    balance: round(asset.quantity, 10),
+    value: round(asset.value, 2),
+    allocation: round(asset.allocation, 2),
+    targetAllocation: round(asset.allocation, 2),
+    sparkline: buildSparklineFromChange(asset.price, asset.change24h ?? 0),
+  }));
+
+  const previousTotalValue = assets.reduce((sum, asset) => {
+    const denominator = 1 + asset.change24h / 100;
+    if (!Number.isFinite(denominator) || Math.abs(denominator) < 0.0001) {
+      return sum + asset.value;
+    }
+    return sum + asset.value / denominator;
+  }, 0);
+  const totalPortfolioValue = round(assets.reduce((sum, asset) => sum + asset.value, 0), 2);
+  const portfolioChange24hValue = round(totalPortfolioValue - previousTotalValue, 2);
+  const portfolioChange24h = previousTotalValue <= 0 ? 0 : round((portfolioChange24hValue / previousTotalValue) * 100, 2);
+  const historyStart = previousTotalValue > 0 ? previousTotalValue : totalPortfolioValue;
+
+  const portfolioHistory = Array.from({ length: 30 }, (_, index) => {
+    const ratio = index / 29;
+    return {
+      time: `-${29 - index}h`,
+      value: round(historyStart + (totalPortfolioValue - historyStart) * ratio, 2),
+    };
+  });
+
+  const marketMovers = [...assets]
+    .filter((asset) => !["USDC", "USDT", "FDUSD"].includes(asset.symbol))
+    .sort((left, right) => Math.abs(right.change24h) - Math.abs(left.change24h))
+    .slice(0, 5)
+    .map((asset) => ({
+      symbol: asset.symbol,
+      name: asset.name,
+      change: round(asset.change24h, 2),
+    }));
+
+  return {
+    connection: {
+      connected: true,
+      source: "none",
+      testnet: false,
+      message: "Demo mode uses simulated holdings and live market prices.",
+    },
+    assets,
+    totalPortfolioValue,
+    portfolioChange24h,
+    portfolioChange24hValue,
+    portfolioHistory,
+    marketMovers,
+    recentActivity: [],
+    generatedAt,
+  };
+}
 
 app.use(
   cors({
@@ -97,7 +196,14 @@ app.delete("/api/binance/connection", async (_req, res) => {
   res.json(connection);
 });
 
-app.get("/api/dashboard", async (_req, res) => {
+app.get("/api/dashboard", async (req, res) => {
+  if (parseDashboardAccountType(req) === "demo") {
+    const demoAccount = await strategyRepository.getDemoAccountSettings();
+    const dashboard = await getDemoDashboardData(demoAccount.balance);
+    res.json(dashboard);
+    return;
+  }
+
   const dashboard = await getDashboardData();
   res.json(dashboard);
 });

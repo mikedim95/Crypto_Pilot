@@ -36,9 +36,9 @@ const Index = () => {
   const renderPage = () => {
     switch (currentPage) {
       case "portfolio":
-        return <PortfolioPage />;
+        return <PortfolioPage accountType={accountType} />;
       case "trading":
-        return <TradingPage />;
+        return <TradingPage accountType={accountType} />;
       case "rebalance":
         return <RebalancePage />;
       case "automation":

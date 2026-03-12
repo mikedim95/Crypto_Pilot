@@ -2,10 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { backendApi } from "@/lib/api";
 import type { PortfolioAccountType } from "@/types/api";
 
-export function useDashboardData() {
+export function useDashboardData(accountType: PortfolioAccountType = "real") {
   return useQuery({
-    queryKey: ["dashboard"],
-    queryFn: backendApi.getDashboard,
+    queryKey: ["dashboard", accountType],
+    queryFn: () => backendApi.getDashboard(accountType),
     staleTime: 10_000,
     refetchInterval: 15_000,
     retry: 1,
