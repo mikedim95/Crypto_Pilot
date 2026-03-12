@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import mysql, { Pool, PoolConnection, RowDataPacket } from "mysql2/promise";
 import {
   BacktestRun,
   BacktestRunStatus,
@@ -17,10 +18,21 @@ import { createNextRunAt } from "./allocation-utils.js";
 
 const DEFAULT_DEMO_ACCOUNT_BALANCE = 10_000;
 const DEFAULT_DEMO_UPDATED_AT = new Date().toISOString();
+const DEFAULT_ACTIVE_USER = "dummy_alice";
+const DUMMY_USERS = [
+  { username: "dummy_alice", email: "dummy_alice@myapp.local" },
+  { username: "dummy_bob", email: "dummy_bob@myapp.local" },
+];
 
 function parsePositiveNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
   return parsed;
 }
 
@@ -142,28 +154,209 @@ function orderByIsoDescending<T extends { createdAt?: string; startedAt?: string
   });
 }
 
+interface StoreRow extends RowDataPacket {
+  payload: unknown;
+}
+
+interface UserRow extends RowDataPacket {
+  id: number;
+  username: string;
+}
+
+function parseStorePayload(payload: unknown): StrategyStoreData {
+  if (typeof payload === "string") {
+    return parseStore(payload);
+  }
+  if (Buffer.isBuffer(payload)) {
+    return parseStore(payload.toString("utf8"));
+  }
+  if (payload && typeof payload === "object") {
+    try {
+      return parseStore(JSON.stringify(payload));
+    } catch {
+      return cloneStore(DEFAULT_STORE);
+    }
+  }
+  return cloneStore(DEFAULT_STORE);
+}
+
 export class StrategyRepository {
   private readonly storePath: string;
+  private readonly pool: Pool;
   private writeQueue: Promise<unknown> = Promise.resolve();
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
+  private activeUserId: number | null = null;
+  private activeUsername: string | null = null;
 
   constructor(customPath?: string) {
     this.storePath = customPath ?? path.join(process.cwd(), "data", "strategy-store.json");
+    this.pool = mysql.createPool({
+      host: process.env.MYAPP_DB_HOST ?? "localhost",
+      port: parsePositiveInteger(process.env.MYAPP_DB_PORT, 3306),
+      user: process.env.MYAPP_DB_USER ?? "myapp_user",
+      password: process.env.MYAPP_DB_PASSWORD ?? "myapp_pass",
+      database: process.env.MYAPP_DB_NAME ?? "myapp",
+      waitForConnections: true,
+      connectionLimit: parsePositiveInteger(process.env.MYAPP_DB_CONNECTION_LIMIT, 10),
+      decimalNumbers: true,
+      dateStrings: true,
+    });
   }
 
   async init(): Promise<void> {
     if (this.initialized) return;
+    if (!this.initPromise) {
+      this.initPromise = this.initialize().catch((error) => {
+        this.initPromise = null;
+        throw error;
+      });
+    }
+    await this.initPromise;
+  }
 
-    const directory = path.dirname(this.storePath);
-    await mkdir(directory, { recursive: true });
+  private requireActiveUserId(): number {
+    if (!this.activeUserId) {
+      throw new Error("Strategy repository active user is not initialized.");
+    }
+    return this.activeUserId;
+  }
 
-    let store = cloneStore(DEFAULT_STORE);
+  private async withConnection<T>(handler: (conn: PoolConnection) => Promise<T>): Promise<T> {
+    const conn = await this.pool.getConnection();
+    try {
+      return await handler(conn);
+    } finally {
+      conn.release();
+    }
+  }
 
+  private async ensureSchema(conn: PoolConnection): Promise<void> {
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS agent_users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(100) NOT NULL UNIQUE,
+        email VARCHAR(255) NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB
+    `);
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS strategy_user_store (
+        user_id INT PRIMARY KEY,
+        payload JSON NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        CONSTRAINT fk_strategy_user_store_user
+          FOREIGN KEY (user_id) REFERENCES agent_users(id)
+          ON DELETE CASCADE
+      ) ENGINE=InnoDB
+    `);
+  }
+
+  private async seedDummyUsers(conn: PoolConnection): Promise<void> {
+    for (const user of DUMMY_USERS) {
+      await conn.query(
+        `
+          INSERT INTO agent_users (username, email)
+          VALUES (?, ?)
+          ON DUPLICATE KEY UPDATE email = VALUES(email)
+        `,
+        [user.username, user.email]
+      );
+    }
+  }
+
+  private async resolveActiveUser(conn: PoolConnection): Promise<void> {
+    const configuredUserId = Number.parseInt(String(process.env.MYAPP_ACTIVE_USER_ID ?? ""), 10);
+    if (Number.isInteger(configuredUserId) && configuredUserId > 0) {
+      const [byIdRows] = await conn.query<UserRow[]>(
+        `
+          SELECT id, username
+          FROM agent_users
+          WHERE id = ?
+          LIMIT 1
+        `,
+        [configuredUserId]
+      );
+      const byId = byIdRows[0];
+      if (byId) {
+        this.activeUserId = byId.id;
+        this.activeUsername = byId.username;
+        return;
+      }
+    }
+
+    const configuredUsername = (process.env.MYAPP_ACTIVE_USER ?? DEFAULT_ACTIVE_USER).trim().toLowerCase();
+    const configuredEmail = `${configuredUsername}@myapp.local`;
+    await conn.query(
+      `
+        INSERT INTO agent_users (username, email)
+        VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE email = VALUES(email)
+      `,
+      [configuredUsername, configuredEmail]
+    );
+
+    const [rows] = await conn.query<UserRow[]>(
+      `
+        SELECT id, username
+        FROM agent_users
+        WHERE LOWER(username) = LOWER(?)
+        LIMIT 1
+      `,
+      [configuredUsername]
+    );
+    const user = rows[0];
+    if (!user) {
+      throw new Error(`Unable to resolve strategy repository user ${configuredUsername}.`);
+    }
+
+    this.activeUserId = user.id;
+    this.activeUsername = user.username;
+  }
+
+  private async loadLegacyStoreFromDisk(): Promise<StrategyStoreData | null> {
     try {
       const raw = await readFile(this.storePath, "utf8");
-      store = parseStore(raw);
+      return parseStore(raw);
     } catch {
-      await writeFile(this.storePath, JSON.stringify(store, null, 2), "utf8");
+      return null;
+    }
+  }
+
+  private async readStoreForUser(conn: PoolConnection, userId: number): Promise<StrategyStoreData | null> {
+    const [rows] = await conn.query<StoreRow[]>(
+      `
+        SELECT payload
+        FROM strategy_user_store
+        WHERE user_id = ?
+        LIMIT 1
+      `,
+      [userId]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return parseStorePayload(row.payload);
+  }
+
+  private async writeStoreForUser(conn: PoolConnection, userId: number, store: StrategyStoreData): Promise<void> {
+    await conn.query(
+      `
+        INSERT INTO strategy_user_store (user_id, payload, updated_at)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          payload = VALUES(payload),
+          updated_at = VALUES(updated_at)
+      `,
+      [userId, JSON.stringify(store), new Date().toISOString()]
+    );
+  }
+
+  private async initializeStoreForActiveUser(conn: PoolConnection): Promise<void> {
+    const userId = this.requireActiveUserId();
+    let store = await this.readStoreForUser(conn, userId);
+    if (!store) {
+      store = (await this.loadLegacyStoreFromDisk()) ?? cloneStore(DEFAULT_STORE);
     }
 
     const nowIso = new Date().toISOString();
@@ -173,7 +366,6 @@ export class StrategyRepository {
         ...strategy,
         nextRunAt: createNextRunAt(nowIso, strategy.scheduleInterval),
       }));
-      await this.writeStore(store);
     } else {
       const existingById = new Set(store.strategies.map((strategy) => strategy.id));
       const missingPresets = presetStrategies
@@ -182,24 +374,36 @@ export class StrategyRepository {
           ...strategy,
           nextRunAt: createNextRunAt(nowIso, strategy.scheduleInterval),
         }));
-
       if (missingPresets.length > 0) {
         store.strategies.push(...missingPresets);
-        await this.writeStore(store);
       }
     }
+
+    store.demoAccount = normalizeDemoAccountSettings(store.demoAccount);
+    await this.writeStoreForUser(conn, userId, store);
+  }
+
+  private async initialize(): Promise<void> {
+    await this.withConnection(async (conn) => {
+      await this.ensureSchema(conn);
+      await this.seedDummyUsers(conn);
+      await this.resolveActiveUser(conn);
+      await this.initializeStoreForActiveUser(conn);
+    });
 
     this.initialized = true;
     await this.markInterruptedRunsAsFailed();
   }
 
   private async readStore(): Promise<StrategyStoreData> {
-    const raw = await readFile(this.storePath, "utf8");
-    return parseStore(raw);
+    return this.withConnection(async (conn) => {
+      const store = await this.readStoreForUser(conn, this.requireActiveUserId());
+      return store ?? cloneStore(DEFAULT_STORE);
+    });
   }
 
   private async writeStore(store: StrategyStoreData): Promise<void> {
-    await writeFile(this.storePath, JSON.stringify(store, null, 2), "utf8");
+    await this.withConnection((conn) => this.writeStoreForUser(conn, this.requireActiveUserId(), store));
   }
 
   private async readAfterWrites<T>(reader: (store: StrategyStoreData) => T | Promise<T>): Promise<T> {
