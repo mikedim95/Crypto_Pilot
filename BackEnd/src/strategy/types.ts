@@ -117,9 +117,17 @@ export interface StrategyScoreResult {
   components: StrategyScoreComponents;
 }
 
+export interface DemoAccountHolding {
+  symbol: string;
+  quantity: number;
+  targetAllocation: number;
+}
+
 export interface DemoAccountSettings {
   balance: number;
   updatedAt: string;
+  seededAt?: string;
+  holdings: DemoAccountHolding[];
 }
 
 export interface StrategyConfig {

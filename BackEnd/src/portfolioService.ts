@@ -10,7 +10,7 @@ import {
   PortfolioHistoryPoint,
 } from "./types.js";
 
-const STABLE_COINS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"]);
+export const STABLE_COINS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"]);
 
 const ASSET_METADATA: Record<string, { name: string; marketCap: number }> = {
   BTC: { name: "Bitcoin", marketCap: 1_350_000_000_000 },
@@ -105,11 +105,11 @@ function toNumber(value: string): number {
   return parsed;
 }
 
-function getNameForSymbol(symbol: string): string {
+export function getNameForSymbol(symbol: string): string {
   return ASSET_METADATA[symbol]?.name ?? symbol;
 }
 
-function getMarketCapForSymbol(symbol: string): number {
+export function getMarketCapForSymbol(symbol: string): number {
   return ASSET_METADATA[symbol]?.marketCap ?? 0;
 }
 
@@ -117,11 +117,11 @@ function getPairSymbol(assetSymbol: string): string {
   return `${assetSymbol}USDT`;
 }
 
-function fallbackSparkline(base: number): number[] {
+function fallbackSeries(base: number): number[] {
   return Array.from({ length: 24 }, (_, i) => round(base + Math.sin(i / 2.2) * base * 0.01, 6));
 }
 
-function generateRecentDayLabels(days: number): string[] {
+export function generateRecentDayLabels(days: number): string[] {
   const formatter = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
   const now = new Date();
 
@@ -165,9 +165,9 @@ function normalizeOrderStatus(rawStatus: string): Order["status"] {
   return "Cancelled";
 }
 
-async function getTickerSnapshot(
+export async function getTickerSnapshot(
   symbol: string,
-  credentials: BinanceCredentials
+  credentials: BinanceCredentials | null
 ): Promise<{ price: number; change24h: number; volume24h: number }> {
   if (STABLE_COINS.has(symbol)) {
     return { price: 1, change24h: 0, volume24h: 0 };
@@ -186,9 +186,13 @@ async function getTickerSnapshot(
   };
 }
 
-async function getHourlySparkline(symbol: string, credentials: BinanceCredentials, fallbackPrice: number): Promise<number[]> {
+export async function getHourlyCloseSeries(
+  symbol: string,
+  credentials: BinanceCredentials | null,
+  fallbackPrice: number
+): Promise<number[]> {
   if (STABLE_COINS.has(symbol)) {
-    return fallbackSparkline(fallbackPrice);
+    return Array.from({ length: 24 }, () => round(fallbackPrice, 6));
   }
 
   const klines = await publicGet<BinanceKline[]>(
@@ -197,13 +201,13 @@ async function getHourlySparkline(symbol: string, credentials: BinanceCredential
     credentials
   );
 
-  if (klines.length === 0) return fallbackSparkline(fallbackPrice);
+  if (klines.length === 0) return fallbackSeries(fallbackPrice);
   return klines.map((kline) => round(toNumber(kline[4]), 6));
 }
 
-async function getDailySeries(
+export async function getDailyCloseSeries(
   symbol: string,
-  credentials: BinanceCredentials,
+  credentials: BinanceCredentials | null,
   fallbackPrice: number
 ): Promise<{ labels: string[]; closes: number[] }> {
   if (STABLE_COINS.has(symbol)) {
@@ -234,6 +238,10 @@ async function getDailySeries(
   };
 }
 
+function toValueSeries(quantity: number, closes: number[]): number[] {
+  return closes.map((close) => round(quantity * close, 2));
+}
+
 async function getAssetSnapshots(credentials: BinanceCredentials): Promise<AssetSnapshot[]> {
   const account = await signedGet<BinanceAccountResponse>("/api/v3/account", {}, credentials);
   const nonZeroBalances = account.balances
@@ -259,7 +267,8 @@ async function getAssetSnapshots(credentials: BinanceCredentials): Promise<Asset
           return null;
         }
 
-        const sparkline = await getHourlySparkline(symbol, credentials, ticker.price).catch(() => fallbackSparkline(ticker.price));
+        const closeSeries = await getHourlyCloseSeries(symbol, credentials, ticker.price).catch(() => fallbackSeries(ticker.price));
+        const sparkline = toValueSeries(holding.quantity, closeSeries);
 
         return {
           previousValue,
@@ -276,6 +285,7 @@ async function getAssetSnapshots(credentials: BinanceCredentials): Promise<Asset
             allocation: 0,
             targetAllocation: 0,
             sparkline,
+            sparklinePeriod: "24h",
           },
         };
       } catch {
@@ -295,7 +305,8 @@ async function getAssetSnapshots(credentials: BinanceCredentials): Promise<Asset
               value: round(value, 2),
               allocation: 0,
               targetAllocation: 0,
-              sparkline: fallbackSparkline(1),
+              sparkline: Array.from({ length: 24 }, () => round(value, 2)),
+              sparklinePeriod: "24h",
             },
           };
         }
@@ -316,7 +327,7 @@ async function buildPortfolioHistory(assets: Asset[], credentials: BinanceCreden
 
   const dailyData = await Promise.all(
     assets.map(async (asset) => {
-      const series = await getDailySeries(asset.symbol, credentials, asset.price).catch(() => ({
+      const series = await getDailyCloseSeries(asset.symbol, credentials, asset.price).catch(() => ({
         labels: generateRecentDayLabels(30),
         closes: Array.from({ length: 30 }, () => asset.price),
       }));

@@ -6,6 +6,7 @@ import {
   BacktestRun,
   BacktestRunStatus,
   BacktestStep,
+  DemoAccountHolding,
   DemoAccountSettings,
   ExecutionPlan,
   StrategyConfig,
@@ -113,6 +114,7 @@ function createDefaultDemoAccountSettings(): DemoAccountSettings {
   return {
     balance: parsePositiveNumber(process.env.DEMO_ACCOUNT_CAPITAL, DEFAULT_DEMO_ACCOUNT_BALANCE),
     updatedAt: DEFAULT_DEMO_UPDATED_AT,
+    holdings: [],
   };
 }
 
@@ -162,6 +164,26 @@ function normalizeStrategyRun(entry: Partial<StrategyRun>): StrategyRun | null {
   };
 }
 
+function normalizeDemoAccountHolding(entry: unknown): DemoAccountHolding | null {
+  if (!entry || typeof entry !== "object") return null;
+
+  const shape = entry as Partial<DemoAccountHolding>;
+  const symbol = typeof shape.symbol === "string" ? shape.symbol.trim().toUpperCase() : "";
+  const quantity = typeof shape.quantity === "number" && Number.isFinite(shape.quantity) && shape.quantity >= 0 ? shape.quantity : null;
+  const targetAllocation =
+    typeof shape.targetAllocation === "number" && Number.isFinite(shape.targetAllocation) && shape.targetAllocation >= 0
+      ? shape.targetAllocation
+      : 0;
+
+  if (!symbol || quantity === null) return null;
+
+  return {
+    symbol,
+    quantity,
+    targetAllocation,
+  };
+}
+
 function normalizeDemoAccountSettings(entry: unknown): DemoAccountSettings {
   if (!entry || typeof entry !== "object") {
     return createDefaultDemoAccountSettings();
@@ -177,10 +199,19 @@ function normalizeDemoAccountSettings(entry: unknown): DemoAccountSettings {
     typeof shape.updatedAt === "string" && shape.updatedAt.trim().length > 0
       ? shape.updatedAt
       : defaultSettings.updatedAt;
+  const seededAt =
+    typeof shape.seededAt === "string" && shape.seededAt.trim().length > 0 ? shape.seededAt : undefined;
+  const holdings = Array.isArray(shape.holdings)
+    ? shape.holdings
+        .map((holding) => normalizeDemoAccountHolding(holding))
+        .filter((holding): holding is DemoAccountHolding => holding !== null)
+    : [];
 
   return {
     balance,
     updatedAt,
+    seededAt,
+    holdings,
   };
 }
 
@@ -191,7 +222,10 @@ function cloneStore(store: StrategyStoreData): StrategyStoreData {
     executionPlans: [...store.executionPlans],
     backtestRuns: [...store.backtestRuns],
     backtestSteps: [...store.backtestSteps],
-    demoAccount: { ...store.demoAccount },
+    demoAccount: {
+      ...store.demoAccount,
+      holdings: store.demoAccount.holdings.map((holding) => ({ ...holding })),
+    },
   };
 }
 
@@ -998,7 +1032,10 @@ export class StrategyRepository {
   }
 
   async getDemoAccountSettings(scope?: StrategyUserScope): Promise<DemoAccountSettings> {
-    return this.readAfterWrites(scope, (store) => ({ ...store.demoAccount }));
+    return this.readAfterWrites(scope, (store) => ({
+      ...store.demoAccount,
+      holdings: store.demoAccount.holdings.map((holding) => ({ ...holding })),
+    }));
   }
 
   async setDemoAccountBalance(balance: number, scope?: StrategyUserScope): Promise<DemoAccountSettings> {
@@ -1007,8 +1044,31 @@ export class StrategyRepository {
       store.demoAccount = {
         balance: safeBalance,
         updatedAt: new Date().toISOString(),
+        holdings: [],
       };
-      return { ...store.demoAccount };
+      return {
+        ...store.demoAccount,
+        holdings: [],
+      };
+    });
+  }
+
+  async setDemoAccountHoldings(holdings: DemoAccountHolding[], scope?: StrategyUserScope): Promise<DemoAccountSettings> {
+    return this.mutate(scope, (store) => {
+      const normalizedHoldings = holdings
+        .map((holding) => normalizeDemoAccountHolding(holding))
+        .filter((holding): holding is DemoAccountHolding => holding !== null);
+      const timestamp = new Date().toISOString();
+      store.demoAccount = {
+        ...store.demoAccount,
+        updatedAt: timestamp,
+        seededAt: timestamp,
+        holdings: normalizedHoldings,
+      };
+      return {
+        ...store.demoAccount,
+        holdings: normalizedHoldings.map((holding) => ({ ...holding })),
+      };
     });
   }
 

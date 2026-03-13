@@ -1,9 +1,10 @@
 import { StrategyEngine } from "./strategy-engine.js";
 import { StrategyRepository } from "./strategy-repository.js";
 import { buildMarketSignalsFromPortfolio } from "./market-signal-service.js";
-import { getPortfolioState } from "./portfolio-state-service.js";
+import { createDemoAccountHoldings, getPortfolioState } from "./portfolio-state-service.js";
 import { strategyUserScopeKey, StrategyUserScope } from "./strategy-user-scope.js";
 import {
+  DemoAccountSettings,
   MarketSignalSnapshot,
   PortfolioAccountType,
   PortfolioState,
@@ -25,10 +26,19 @@ export class StrategyRunner {
     return this.activeStrategies.has(this.runKey(strategyId, accountType, userScope));
   }
 
-  private async resolveDemoBalance(accountType: PortfolioAccountType, userScope?: StrategyUserScope): Promise<number | undefined> {
+  private async resolveDemoSettings(
+    accountType: PortfolioAccountType,
+    userScope?: StrategyUserScope
+  ): Promise<DemoAccountSettings | undefined> {
     if (accountType !== "demo") return undefined;
-    const demoSettings = await this.repository.getDemoAccountSettings(userScope);
-    return demoSettings.balance;
+    let demoSettings = await this.repository.getDemoAccountSettings(userScope);
+    if (demoSettings.holdings.length > 0) {
+      return demoSettings;
+    }
+
+    const holdings = await createDemoAccountHoldings("USDC", demoSettings.balance);
+    demoSettings = await this.repository.setDemoAccountHoldings(holdings, userScope);
+    return demoSettings;
   }
 
   private async buildStrategyUniverse(userScope?: StrategyUserScope): Promise<Record<string, StrategyConfig>> {
@@ -64,8 +74,8 @@ export class StrategyRunner {
     const strategy = await this.repository.getStrategy(strategyId, userScope);
     if (!strategy) return null;
 
-    const demoBalance = await this.resolveDemoBalance(accountType, userScope);
-    const portfolio = await getPortfolioState(accountType, "USDC", { demoCapital: demoBalance });
+    const demoSettings = await this.resolveDemoSettings(accountType, userScope);
+    const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings });
     const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
     const strategyUniverse = await this.buildStrategyUniverse(userScope);
 
@@ -130,8 +140,8 @@ export class StrategyRunner {
     }, userScope);
 
     try {
-      const demoBalance = await this.resolveDemoBalance(accountType, userScope);
-      const portfolio = await getPortfolioState(accountType, "USDC", { demoCapital: demoBalance });
+      const demoSettings = await this.resolveDemoSettings(accountType, userScope);
+      const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings });
       const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
       const strategyUniverse = await this.buildStrategyUniverse(userScope);
 

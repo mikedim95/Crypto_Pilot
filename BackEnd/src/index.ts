@@ -18,15 +18,23 @@ import { MinerPollingService } from "./miners/miner-polling-service.js";
 import { MinerReadService } from "./miners/miner-read-service.js";
 import { MinerRepository as FleetMinerRepository } from "./miners/miner-repository.js";
 import { MinerVerifyService } from "./miners/miner-verify-service.js";
-import { getDashboardData, getOrdersData } from "./portfolioService.js";
+import {
+  generateRecentDayLabels,
+  getDailyCloseSeries,
+  getDashboardData,
+  getHourlyCloseSeries,
+  getMarketCapForSymbol,
+  getNameForSymbol,
+  getOrdersData,
+} from "./portfolioService.js";
 import type { DashboardResponse } from "./types.js";
 import { BacktestEngine } from "./strategy/backtest-engine.js";
-import { getDemoPortfolioState } from "./strategy/portfolio-state-service.js";
+import { createDemoAccountHoldings, getDemoPortfolioState } from "./strategy/portfolio-state-service.js";
 import { StrategyRepository } from "./strategy/strategy-repository.js";
 import { StrategyRunner } from "./strategy/strategy-runner.js";
 import { StrategyScheduler } from "./strategy/strategy-scheduler.js";
 import { createStrategyRouter } from "./strategy/strategy-api.js";
-import { resolveStrategyUserScope } from "./strategy/strategy-user-scope.js";
+import { resolveStrategyUserScope, StrategyUserScope } from "./strategy/strategy-user-scope.js";
 
 const app = express();
 
@@ -54,19 +62,6 @@ const minerVerifyService = new MinerVerifyService(minerHttpClient, minerCgminerC
 const minerCommandService = new MinerCommandService(minerRepository, minerHttpClient, minerAuthService, minerReadService);
 const minerPollingService = new MinerPollingService(minerRepository, minerReadService, minerPollMs);
 
-const DEMO_ASSET_NAMES: Record<string, string> = {
-  BTC: "Bitcoin",
-  ETH: "Ethereum",
-  BNB: "BNB",
-  SOL: "Solana",
-  XRP: "XRP",
-  ADA: "Cardano",
-  DOGE: "Dogecoin",
-  USDC: "USD Coin",
-  USDT: "Tether",
-  FDUSD: "First Digital USD",
-};
-
 function round(value: number, digits = 2): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
@@ -81,49 +76,77 @@ function parseTextField(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function buildSparklineFromChange(price: number, change24h: number): number[] {
-  const previousPrice = Math.abs(100 + change24h) < 0.0001 ? price : price / (1 + change24h / 100);
-  return Array.from({ length: 20 }, (_, index) => {
-    const ratio = index / 19;
-    return round(previousPrice + (price - previousPrice) * ratio, 6);
-  });
+async function resolveDemoAccountSettings(userScope?: StrategyUserScope) {
+  let demoAccount = await strategyRepository.getDemoAccountSettings(userScope);
+  if (demoAccount.holdings.length > 0) {
+    return demoAccount;
+  }
+
+  const holdings = await createDemoAccountHoldings("USDC", demoAccount.balance);
+  demoAccount = await strategyRepository.setDemoAccountHoldings(holdings, userScope);
+  return demoAccount;
 }
 
-async function getDemoDashboardData(demoCapital: number): Promise<DashboardResponse> {
-  const portfolio = await getDemoPortfolioState("USDC", demoCapital);
+async function getDemoDashboardData(userScope?: StrategyUserScope): Promise<DashboardResponse> {
+  const demoAccount = await resolveDemoAccountSettings(userScope);
+  const portfolio = await getDemoPortfolioState("USDC", { demoAccount });
   const generatedAt = portfolio.timestamp;
-  const assets = portfolio.assets.map((asset) => ({
+  const targetAllocationBySymbol = new Map(
+    demoAccount.holdings.map((holding) => [holding.symbol.toUpperCase(), holding.targetAllocation])
+  );
+
+  const assetSeries = await Promise.all(
+    portfolio.assets.map(async (asset) => {
+      const [hourlyCloses, dailySeries] = await Promise.all([
+        getHourlyCloseSeries(asset.symbol, null, asset.price).catch(() => Array.from({ length: 24 }, () => asset.price)),
+        getDailyCloseSeries(asset.symbol, null, asset.price).catch(() => ({
+          labels: generateRecentDayLabels(30),
+          closes: Array.from({ length: 30 }, () => asset.price),
+        })),
+      ]);
+
+      return {
+        asset,
+        hourlyValues: hourlyCloses.map((close) => round(asset.quantity * close, 2)),
+        dailySeries,
+      };
+    })
+  );
+
+  const assets = assetSeries.map(({ asset, hourlyValues }) => ({
     id: asset.symbol.toLowerCase(),
     symbol: asset.symbol,
-    name: DEMO_ASSET_NAMES[asset.symbol] ?? asset.symbol,
+    name: getNameForSymbol(asset.symbol),
     price: round(asset.price, 8),
     change24h: round(asset.change24h ?? 0, 4),
     volume24h: round(asset.volume24h ?? 0, 2),
-    marketCap: 0,
+    marketCap: getMarketCapForSymbol(asset.symbol),
     balance: round(asset.quantity, 10),
     value: round(asset.value, 2),
     allocation: round(asset.allocation, 2),
-    targetAllocation: round(asset.allocation, 2),
-    sparkline: buildSparklineFromChange(asset.price, asset.change24h ?? 0),
+    targetAllocation: round(targetAllocationBySymbol.get(asset.symbol) ?? asset.allocation, 2),
+    sparkline: hourlyValues,
+    sparklinePeriod: "24h" as const,
   }));
 
-  const previousTotalValue = assets.reduce((sum, asset) => {
-    const denominator = 1 + asset.change24h / 100;
-    if (!Number.isFinite(denominator) || Math.abs(denominator) < 0.0001) {
-      return sum + asset.value;
-    }
-    return sum + asset.value / denominator;
-  }, 0);
+  const previousTotalValue = round(
+    assets.reduce((sum, asset) => sum + (asset.sparkline[0] ?? asset.value), 0),
+    2
+  );
   const totalPortfolioValue = round(assets.reduce((sum, asset) => sum + asset.value, 0), 2);
   const portfolioChange24hValue = round(totalPortfolioValue - previousTotalValue, 2);
   const portfolioChange24h = previousTotalValue <= 0 ? 0 : round((portfolioChange24hValue / previousTotalValue) * 100, 2);
-  const historyStart = previousTotalValue > 0 ? previousTotalValue : totalPortfolioValue;
 
-  const portfolioHistory = Array.from({ length: 30 }, (_, index) => {
-    const ratio = index / 29;
+  const labels = assetSeries[0]?.dailySeries.labels ?? generateRecentDayLabels(30);
+  const portfolioHistory = labels.map((label, index) => {
+    const value = assetSeries.reduce((sum, { asset, dailySeries }) => {
+      const priceAtIndex = dailySeries.closes[index] ?? asset.price;
+      return sum + asset.quantity * priceAtIndex;
+    }, 0);
+
     return {
-      time: `-${29 - index}h`,
-      value: round(historyStart + (totalPortfolioValue - historyStart) * ratio, 2),
+      time: label,
+      value: round(value, 2),
     };
   });
 
@@ -273,8 +296,7 @@ app.delete("/api/binance/connection", async (_req, res) => {
 app.get("/api/dashboard", async (req, res) => {
   if (parseDashboardAccountType(req) === "demo") {
     const userScope = resolveStrategyUserScope(req);
-    const demoAccount = await strategyRepository.getDemoAccountSettings(userScope);
-    const dashboard = await getDemoDashboardData(demoAccount.balance);
+    const dashboard = await getDemoDashboardData(userScope);
     res.json(dashboard);
     return;
   }

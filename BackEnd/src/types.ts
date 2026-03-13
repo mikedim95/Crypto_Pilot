@@ -11,6 +11,7 @@ export interface Asset {
   allocation: number;
   targetAllocation: number;
   sparkline: number[];
+  sparklinePeriod: "24h";
 }
 
 export interface Order {

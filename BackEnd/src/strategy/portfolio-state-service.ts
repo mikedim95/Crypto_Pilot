@@ -1,27 +1,13 @@
-import { publicGet } from "../binanceClient.js";
-import { getDashboardData } from "../portfolioService.js";
+import { getDashboardData, getTickerSnapshot } from "../portfolioService.js";
 import { allocationFromAssetValues } from "./asset-groups.js";
 import { normalizeAllocation, round } from "./allocation-utils.js";
-import { PortfolioAccountType, PortfolioState } from "./types.js";
+import { DemoAccountHolding, DemoAccountSettings, PortfolioAccountType, PortfolioState } from "./types.js";
 
-const STABLE_COINS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"]);
 const DEFAULT_DEMO_CAPITAL = 10_000;
 const DEFAULT_DEMO_ALLOCATION = "BTC:40,ETH:30,BNB:10,USDC:20";
+const STABLE_COINS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "DAI"]);
 
-interface BinanceTicker24hResponse {
-  symbol: string;
-  lastPrice: string;
-  priceChangePercent: string;
-  quoteVolume: string;
-}
-
-function toNumber(value: string): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 0;
-  return parsed;
-}
-
-function parsePositiveFloat(value: string | undefined, fallback: number): number {
+function parsePositiveFloat(value: number | string | undefined, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return parsed;
@@ -50,22 +36,93 @@ function parseDemoAllocation(rawValue: string | undefined, baseCurrency: string)
   return normalizeAllocation(parsed);
 }
 
-function getPairSymbol(symbol: string): string {
-  return `${symbol}USDT`;
-}
+function getResolvedDemoCapital(demoCapitalOverride?: number, demoAccount?: DemoAccountSettings): number {
+  const fallbackCapital = parsePositiveFloat(process.env.DEMO_ACCOUNT_CAPITAL, DEFAULT_DEMO_CAPITAL);
 
-async function getTickerSnapshot(symbol: string): Promise<{ price: number; change24h: number; volume24h: number }> {
-  if (STABLE_COINS.has(symbol)) {
-    return { price: 1, change24h: 0, volume24h: 0 };
+  if (demoAccount) {
+    return parsePositiveFloat(demoAccount.balance, fallbackCapital);
   }
 
-  const ticker = await publicGet<BinanceTicker24hResponse>("/api/v3/ticker/24hr", { symbol: getPairSymbol(symbol) });
+  return parsePositiveFloat(demoCapitalOverride, fallbackCapital);
+}
 
-  return {
-    price: toNumber(ticker.lastPrice),
-    change24h: toNumber(ticker.priceChangePercent),
-    volume24h: toNumber(ticker.quoteVolume),
-  };
+function normalizeHoldings(holdings: DemoAccountHolding[] | undefined): DemoAccountHolding[] {
+  if (!Array.isArray(holdings)) return [];
+
+  return holdings
+    .map((holding) => ({
+      symbol: normalizeSymbol(holding.symbol),
+      quantity: Number.isFinite(holding.quantity) && holding.quantity >= 0 ? holding.quantity : 0,
+      targetAllocation:
+        Number.isFinite(holding.targetAllocation) && holding.targetAllocation >= 0 ? holding.targetAllocation : 0,
+    }))
+    .filter((holding) => holding.symbol.length > 0 && holding.quantity > 0);
+}
+
+export async function createDemoAccountHoldings(
+  baseCurrency = "USDC",
+  demoCapitalOverride?: number
+): Promise<DemoAccountHolding[]> {
+  const normalizedBase = normalizeSymbol(baseCurrency || "USDC");
+  const demoCapital = getResolvedDemoCapital(demoCapitalOverride);
+  const targetAllocation = parseDemoAllocation(process.env.DEMO_ACCOUNT_ALLOCATION, normalizedBase);
+  const symbols = Array.from(new Set([...Object.keys(targetAllocation), normalizedBase]));
+
+  const tickerEntries = await Promise.all(
+    symbols.map(async (symbol) => {
+      try {
+        const ticker = await getTickerSnapshot(symbol, null);
+        return [symbol, ticker] as const;
+      } catch {
+        return [symbol, { price: STABLE_COINS.has(symbol) ? 1 : 0, change24h: 0, volume24h: 0 }] as const;
+      }
+    })
+  );
+
+  const tickers = tickerEntries.reduce<Record<string, { price: number; change24h: number; volume24h: number }>>(
+    (acc, [symbol, ticker]) => {
+      acc[symbol] = ticker;
+      return acc;
+    },
+    {}
+  );
+
+  const holdings = symbols
+    .map((symbol) => {
+      const ticker = tickers[symbol] ?? { price: 0, change24h: 0, volume24h: 0 };
+      const targetPct = targetAllocation[symbol] ?? 0;
+      const notional = (targetPct / 100) * demoCapital;
+      const quantity = ticker.price > 0 ? notional / ticker.price : 0;
+
+      return {
+        symbol,
+        quantity: round(quantity, 10),
+        targetAllocation: round(targetPct, 4),
+      };
+    })
+    .filter((holding) => holding.quantity > 0 || holding.targetAllocation > 0);
+
+  const allocatedValue = holdings.reduce((sum, holding) => {
+    const ticker = tickers[holding.symbol] ?? { price: 0, change24h: 0, volume24h: 0 };
+    return sum + holding.quantity * ticker.price;
+  }, 0);
+  const remainder = Math.max(0, round(demoCapital - allocatedValue, 2));
+  const baseHolding = holdings.find((holding) => holding.symbol === normalizedBase);
+
+  if (remainder > 0) {
+    const basePrice = tickers[normalizedBase]?.price ?? 1;
+    if (baseHolding) {
+      baseHolding.quantity = basePrice > 0 ? round(baseHolding.quantity + remainder / basePrice, 10) : round(baseHolding.quantity + remainder, 10);
+    } else {
+      holdings.push({
+        symbol: normalizedBase,
+        quantity: basePrice > 0 ? round(remainder / basePrice, 10) : round(remainder, 10),
+        targetAllocation: round(targetAllocation[normalizedBase] ?? 0, 4),
+      });
+    }
+  }
+
+  return holdings.filter((holding) => holding.quantity > 0);
 }
 
 export async function getLivePortfolioState(baseCurrency = "USDC"): Promise<PortfolioState> {
@@ -106,23 +163,22 @@ export async function getLivePortfolioState(baseCurrency = "USDC"): Promise<Port
   };
 }
 
-export async function getDemoPortfolioState(baseCurrency = "USDC", demoCapitalOverride?: number): Promise<PortfolioState> {
+export async function getDemoPortfolioState(
+  baseCurrency = "USDC",
+  options?: { demoCapital?: number; demoAccount?: DemoAccountSettings }
+): Promise<PortfolioState> {
   const normalizedBase = normalizeSymbol(baseCurrency || "USDC");
-  const fallbackCapital = parsePositiveFloat(process.env.DEMO_ACCOUNT_CAPITAL, DEFAULT_DEMO_CAPITAL);
-  const demoCapital =
-    typeof demoCapitalOverride === "number" && Number.isFinite(demoCapitalOverride) && demoCapitalOverride > 0
-      ? demoCapitalOverride
-      : fallbackCapital;
-  const targetAllocation = parseDemoAllocation(process.env.DEMO_ACCOUNT_ALLOCATION, normalizedBase);
-  const symbols = Object.keys(targetAllocation);
-  if (!symbols.includes(normalizedBase)) {
-    symbols.push(normalizedBase);
-  }
+  const demoCapital = getResolvedDemoCapital(options?.demoCapital, options?.demoAccount);
+  const holdings =
+    normalizeHoldings(options?.demoAccount?.holdings).length > 0
+      ? normalizeHoldings(options?.demoAccount?.holdings)
+      : await createDemoAccountHoldings(normalizedBase, demoCapital);
+  const symbols = Array.from(new Set(holdings.map((holding) => holding.symbol)));
 
   const tickerEntries = await Promise.all(
     symbols.map(async (symbol) => {
       try {
-        const ticker = await getTickerSnapshot(symbol);
+        const ticker = await getTickerSnapshot(symbol, null);
         return [symbol, ticker] as const;
       } catch {
         return [symbol, { price: STABLE_COINS.has(symbol) ? 1 : 0, change24h: 0, volume24h: 0 }] as const;
@@ -138,52 +194,39 @@ export async function getDemoPortfolioState(baseCurrency = "USDC", demoCapitalOv
     {}
   );
 
-  const assets = symbols.map((symbol) => {
-    const ticker = tickers[symbol] ?? { price: 0, change24h: 0, volume24h: 0 };
-    const notional = ((targetAllocation[symbol] ?? 0) / 100) * demoCapital;
-    const quantity = ticker.price > 0 ? notional / ticker.price : 0;
-    const value = quantity * ticker.price;
+  const assets = holdings
+    .map((holding) => {
+      const ticker = tickers[holding.symbol] ?? { price: 0, change24h: 0, volume24h: 0 };
+      const value = holding.quantity * ticker.price;
 
-    return {
-      symbol,
-      quantity: round(quantity, 10),
-      price: round(ticker.price, 8),
-      value: round(value, 2),
-      allocation: 0,
-      change24h: round(ticker.change24h, 4),
-      volume24h: round(ticker.volume24h, 2),
-    };
-  });
-
-  const allocatedValue = assets.reduce((sum, asset) => sum + asset.value, 0);
-  const remainder = Math.max(0, round(demoCapital - allocatedValue, 2));
-  const baseAsset = assets.find((asset) => asset.symbol === normalizedBase);
-
-  if (remainder > 0) {
-    if (baseAsset) {
-      baseAsset.value = round(baseAsset.value + remainder, 2);
-      baseAsset.quantity = baseAsset.price > 0 ? round(baseAsset.value / baseAsset.price, 10) : round(baseAsset.value, 10);
-    } else {
-      assets.push({
-        symbol: normalizedBase,
-        quantity: round(remainder, 10),
-        price: 1,
-        value: round(remainder, 2),
+      return {
+        symbol: holding.symbol,
+        quantity: round(holding.quantity, 10),
+        price: round(ticker.price, 8),
+        value: round(value, 2),
         allocation: 0,
-        change24h: 0,
-        volume24h: 0,
-      });
-    }
+        change24h: round(ticker.change24h, 4),
+        volume24h: round(ticker.volume24h, 2),
+      };
+    })
+    .filter((asset) => asset.quantity > 0);
+
+  if (assets.length === 0) {
+    assets.push({
+      symbol: normalizedBase,
+      quantity: round(demoCapital, 10),
+      price: 1,
+      value: round(demoCapital, 2),
+      allocation: 0,
+      change24h: 0,
+      volume24h: 0,
+    });
   }
 
   const totalValue = assets.reduce((sum, asset) => sum + asset.value, 0);
   const allocation = normalizeAllocation(
     assets.reduce<Record<string, number>>((acc, asset) => {
-      if (totalValue <= 0) {
-        acc[asset.symbol] = 0;
-      } else {
-        acc[asset.symbol] = (asset.value / totalValue) * 100;
-      }
+      acc[asset.symbol] = totalValue > 0 ? (asset.value / totalValue) * 100 : 0;
       return acc;
     }, {}),
     assets.map((asset) => asset.symbol)
@@ -208,10 +251,10 @@ export async function getDemoPortfolioState(baseCurrency = "USDC", demoCapitalOv
 export async function getPortfolioState(
   accountType: PortfolioAccountType,
   baseCurrency = "USDC",
-  options?: { demoCapital?: number }
+  options?: { demoCapital?: number; demoAccount?: DemoAccountSettings }
 ): Promise<PortfolioState> {
   if (accountType === "demo") {
-    return getDemoPortfolioState(baseCurrency, options?.demoCapital);
+    return getDemoPortfolioState(baseCurrency, options);
   }
 
   return getLivePortfolioState(baseCurrency);
