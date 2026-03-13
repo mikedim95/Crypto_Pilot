@@ -43,7 +43,7 @@ export interface MarketMover {
   change: number;
 }
 
-export type ConnectionSource = "none" | "env" | "session";
+export type ConnectionSource = "none" | "env" | "session" | "stored";
 
 export interface ConnectionStatus {
   connected: boolean;
@@ -73,6 +73,19 @@ export interface BinanceCredentials {
   apiKey: string;
   apiSecret: string;
   testnet: boolean;
+}
+
+export interface NicehashCredentials {
+  apiKey: string;
+  apiSecret: string;
+  organizationId: string;
+  apiHost: string;
+}
+
+export interface NicehashConnectionStatus {
+  connected: boolean;
+  source: ConnectionSource;
+  message?: string;
 }
 
 export interface MinerBasicInfo {
@@ -109,7 +122,7 @@ export interface MiningOverviewResponse {
 }
 
 export interface NicehashOverviewResponse {
-  source: "none" | "env";
+  source: ConnectionSource;
   connected: boolean;
   message?: string;
   poolStatus: string | null;

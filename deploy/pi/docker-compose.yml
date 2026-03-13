@@ -10,7 +10,8 @@ services:
       MYAPP_DB_PORT: "3306"
       MYAPP_DB_NAME: "${MYSQL_DATABASE:-mytrader}"
       MYAPP_DB_USER: "${MYSQL_USER:-mytrader}"
-      MYAPP_DB_PASSWORD: "${MYSQL_PASSWORD:root-change-me}"
+      MYAPP_DB_PASSWORD: "${MYSQL_PASSWORD:-change-me}"
+      USER_CREDENTIALS_SECRET: "${USER_CREDENTIALS_SECRET:-change-this-user-credentials-secret}"
       STRATEGY_STORE_PATH: "/app/data/strategy-store.json"
     volumes:
       - backend_data:/app/data

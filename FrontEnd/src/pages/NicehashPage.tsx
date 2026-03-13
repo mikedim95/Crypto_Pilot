@@ -193,7 +193,7 @@ export function NicehashPage() {
           </div>
         ) : assets.length === 0 ? (
           <div className="px-5 py-6 text-sm text-muted-foreground">
-            No non-zero wallet assets found yet. Configure `NICEHASH_API_KEY`, `NICEHASH_API_SECRET`, and `NICEHASH_ORG_ID` in backend `.env`.
+            No non-zero wallet assets found yet. Save NiceHash credentials in Settings for this user, or configure backend environment credentials.
           </div>
         ) : (
           <table className="w-full">

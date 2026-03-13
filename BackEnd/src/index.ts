@@ -2,11 +2,17 @@ import "dotenv/config";
 import cors from "cors";
 import express, { NextFunction, Request, Response } from "express";
 import {
-  clearSessionCredentials,
+  clearUserCredentials,
   getConnectionStatus,
-  setSessionCredentials,
+  storeUserCredentials,
   validateCredentials,
 } from "./binanceClient.js";
+import {
+  clearNicehashCredentials,
+  getNicehashConnectionStatus,
+  storeNicehashCredentials,
+  validateNicehashCredentials,
+} from "./nicehashClient.js";
 import { getMiningOverviewData, getNicehashOverviewData } from "./miningService.js";
 import { createMinerRouter } from "./miners/miner-api.js";
 import { MinerAuthService } from "./miners/miner-auth-service.js";
@@ -75,6 +81,18 @@ function parseDashboardAccountType(req: Request): "real" | "demo" {
 
 function parseTextField(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function requireUserScope(req: Request, res: Response): StrategyUserScope | null {
+  const userScope = resolveStrategyUserScope(req);
+  if (userScope) {
+    return userScope;
+  }
+
+  res.status(400).json({
+    message: "A signed-in user is required for this action.",
+  });
+  return null;
 }
 
 async function resolveDemoAccountSettings(userScope?: StrategyUserScope) {
@@ -253,12 +271,16 @@ app.post("/api/session/login", async (req, res) => {
   }
 });
 
-app.get("/api/binance/connection", async (_req, res) => {
-  const connection = await getConnectionStatus();
+app.get("/api/binance/connection", async (req, res) => {
+  const userScope = resolveStrategyUserScope(req);
+  const connection = await getConnectionStatus(userScope);
   res.json(connection);
 });
 
 app.post("/api/binance/connection", async (req, res) => {
+  const userScope = requireUserScope(req, res);
+  if (!userScope) return;
+
   const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
   const apiSecret = typeof req.body?.apiSecret === "string" ? req.body.apiSecret.trim() : "";
   const testnet = Boolean(req.body?.testnet);
@@ -273,41 +295,42 @@ app.post("/api/binance/connection", async (req, res) => {
   try {
     const credentials = { apiKey, apiSecret, testnet };
     await validateCredentials(credentials);
-    setSessionCredentials(credentials);
 
-    const connection = await getConnectionStatus();
+    const connection = await storeUserCredentials(userScope, credentials);
     res.json(connection);
   } catch (error) {
-    clearSessionCredentials();
     res.status(400).json({
       connected: false,
-      source: "session",
+      source: "stored",
       testnet,
       message: error instanceof Error ? error.message : "Unable to validate Binance credentials.",
     });
   }
 });
 
-app.delete("/api/binance/connection", async (_req, res) => {
-  clearSessionCredentials();
-  const connection = await getConnectionStatus();
+app.delete("/api/binance/connection", async (req, res) => {
+  const userScope = requireUserScope(req, res);
+  if (!userScope) return;
+
+  const connection = await clearUserCredentials(userScope);
   res.json(connection);
 });
 
 app.get("/api/dashboard", async (req, res) => {
+  const userScope = resolveStrategyUserScope(req);
   if (parseDashboardAccountType(req) === "demo") {
-    const userScope = resolveStrategyUserScope(req);
     const dashboard = await getDemoDashboardData(userScope);
     res.json(dashboard);
     return;
   }
 
-  const dashboard = await getDashboardData();
+  const dashboard = await getDashboardData(userScope);
   res.json(dashboard);
 });
 
-app.get("/api/orders", async (_req, res) => {
-  const orders = await getOrdersData();
+app.get("/api/orders", async (req, res) => {
+  const userScope = resolveStrategyUserScope(req);
+  const orders = await getOrdersData(userScope);
   res.json(orders);
 });
 
@@ -316,8 +339,59 @@ app.get("/api/mining/overview", (_req, res) => {
   res.json(overview);
 });
 
-app.get("/api/mining/nicehash", async (_req, res) => {
-  const overview = await getNicehashOverviewData();
+app.get("/api/nicehash/connection", async (req, res) => {
+  const userScope = resolveStrategyUserScope(req);
+  const connection = await getNicehashConnectionStatus(userScope);
+  res.json(connection);
+});
+
+app.post("/api/nicehash/connection", async (req, res) => {
+  const userScope = requireUserScope(req, res);
+  if (!userScope) return;
+
+  const apiKey = parseTextField(req.body?.apiKey);
+  const apiSecret = parseTextField(req.body?.apiSecret);
+  const organizationId = parseTextField(req.body?.organizationId);
+  const apiHost = parseTextField(req.body?.apiHost) || "https://api2.nicehash.com";
+
+  if (!apiKey || !apiSecret || !organizationId) {
+    res.status(400).json({
+      message: "apiKey, apiSecret, and organizationId are required.",
+    });
+    return;
+  }
+
+  try {
+    const credentials = {
+      apiKey,
+      apiSecret,
+      organizationId,
+      apiHost,
+    };
+
+    await validateNicehashCredentials(credentials);
+    const connection = await storeNicehashCredentials(userScope, credentials);
+    res.json(connection);
+  } catch (error) {
+    res.status(400).json({
+      connected: false,
+      source: "stored",
+      message: error instanceof Error ? error.message : "Unable to validate NiceHash credentials.",
+    });
+  }
+});
+
+app.delete("/api/nicehash/connection", async (req, res) => {
+  const userScope = requireUserScope(req, res);
+  if (!userScope) return;
+
+  const connection = await clearNicehashCredentials(userScope);
+  res.json(connection);
+});
+
+app.get("/api/mining/nicehash", async (req, res) => {
+  const userScope = resolveStrategyUserScope(req);
+  const overview = await getNicehashOverviewData(userScope);
   res.json(overview);
 });
 

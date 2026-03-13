@@ -32,6 +32,16 @@ export function useBinanceConnection() {
   });
 }
 
+export function useNicehashConnection() {
+  return useQuery({
+    queryKey: ["nicehash-connection"],
+    queryFn: backendApi.getNicehashConnection,
+    staleTime: 5_000,
+    refetchInterval: 15_000,
+    retry: false,
+  });
+}
+
 export function useDemoAccountSettings() {
   return useQuery({
     queryKey: ["demo-account-settings"],

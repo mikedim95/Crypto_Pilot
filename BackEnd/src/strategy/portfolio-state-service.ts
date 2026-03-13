@@ -1,6 +1,7 @@
 import { getDashboardData, getTickerSnapshot } from "../portfolioService.js";
 import { allocationFromAssetValues } from "./asset-groups.js";
 import { normalizeAllocation, round } from "./allocation-utils.js";
+import type { StrategyUserScope } from "./strategy-user-scope.js";
 import { DemoAccountHolding, DemoAccountSettings, PortfolioAccountType, PortfolioState } from "./types.js";
 
 const DEFAULT_DEMO_CAPITAL = 10_000;
@@ -125,8 +126,8 @@ export async function createDemoAccountHoldings(
   return holdings.filter((holding) => holding.quantity > 0);
 }
 
-export async function getLivePortfolioState(baseCurrency = "USDC"): Promise<PortfolioState> {
-  const dashboard = await getDashboardData();
+export async function getLivePortfolioState(baseCurrency = "USDC", userScope?: StrategyUserScope): Promise<PortfolioState> {
+  const dashboard = await getDashboardData(userScope);
 
   const assets = dashboard.assets.map((asset) => ({
     symbol: asset.symbol.toUpperCase(),
@@ -249,11 +250,11 @@ export async function getDemoPortfolioState(
 export async function getPortfolioState(
   accountType: PortfolioAccountType,
   baseCurrency = "USDC",
-  options?: { demoCapital?: number; demoAccount?: DemoAccountSettings }
+  options?: { demoCapital?: number; demoAccount?: DemoAccountSettings; userScope?: StrategyUserScope }
 ): Promise<PortfolioState> {
   if (accountType === "demo") {
     return getDemoPortfolioState(baseCurrency, options);
   }
 
-  return getLivePortfolioState(baseCurrency);
+  return getLivePortfolioState(baseCurrency, options?.userScope);
 }

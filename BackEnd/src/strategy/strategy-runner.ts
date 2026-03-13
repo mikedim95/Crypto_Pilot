@@ -75,7 +75,7 @@ export class StrategyRunner {
     if (!strategy) return null;
 
     const demoSettings = await this.resolveDemoSettings(accountType, userScope);
-    const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings });
+    const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings, userScope });
     const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
     const strategyUniverse = await this.buildStrategyUniverse(userScope);
 
@@ -141,7 +141,7 @@ export class StrategyRunner {
 
     try {
       const demoSettings = await this.resolveDemoSettings(accountType, userScope);
-      const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings });
+      const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings, userScope });
       const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
       const strategyUniverse = await this.buildStrategyUniverse(userScope);
 

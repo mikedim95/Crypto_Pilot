@@ -1,5 +1,13 @@
 import crypto from "node:crypto";
-import { MinerBasicInfo, NicehashAssetBalance } from "./types.js";
+import type { StrategyUserScope } from "./strategy/strategy-user-scope.js";
+import {
+  ConnectionSource,
+  MinerBasicInfo,
+  NicehashAssetBalance,
+  NicehashConnectionStatus,
+  NicehashCredentials,
+} from "./types.js";
+import { userCredentialStore } from "./user-credentials/user-credential-store.js";
 
 const DEFAULT_API_HOST = "https://api2.nicehash.com";
 const TIME_OFFSET_CACHE_MS = 60_000;
@@ -7,13 +15,6 @@ const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_FETCH = 20;
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
-
-interface NicehashCredentials {
-  apiKey: string;
-  apiSecret: string;
-  organizationId: string;
-  apiHost: string;
-}
 
 interface TimeResponse {
   serverTime?: unknown;
@@ -74,7 +75,7 @@ interface AlgorithmMeta {
 }
 
 export interface NicehashAccountSnapshot {
-  source: "none" | "env";
+  source: ConnectionSource;
   connected: boolean;
   message?: string;
   totalBtc: number | null;
@@ -82,7 +83,7 @@ export interface NicehashAccountSnapshot {
 }
 
 export interface NicehashMiningSnapshot {
-  source: "none" | "env";
+  source: ConnectionSource;
   connected: boolean;
   message?: string;
   miningAddress: string | null;
@@ -203,6 +204,41 @@ function getCredentialsFromEnv(): NicehashCredentials | null {
     apiSecret,
     organizationId,
     apiHost: configuredHost.replace(/\/+$/, ""),
+  };
+}
+
+async function resolveCredentials(
+  userScope?: StrategyUserScope
+): Promise<{ credentials: NicehashCredentials | null; source: ConnectionSource; message?: string }> {
+  if (userScope) {
+    const lookup = await userCredentialStore.getNicehashCredentials(userScope);
+    if (lookup.exists) {
+      if (!lookup.value) {
+        return {
+          credentials: null,
+          source: "stored",
+          message: lookup.error ?? "Stored NiceHash credentials are unavailable.",
+        };
+      }
+
+      return {
+        credentials: lookup.value,
+        source: "stored",
+      };
+    }
+  }
+
+  const envCredentials = getCredentialsFromEnv();
+  if (envCredentials) {
+    return {
+      credentials: envCredentials,
+      source: "env",
+    };
+  }
+
+  return {
+    credentials: null,
+    source: "none",
   };
 }
 
@@ -695,12 +731,55 @@ async function fetchMiningAddress(credentials: NicehashCredentials): Promise<str
   return stringFromUnknown(response.address);
 }
 
-export async function getNicehashAccountSnapshot(): Promise<NicehashAccountSnapshot> {
-  const credentials = getCredentialsFromEnv();
+export async function validateNicehashCredentials(credentials: NicehashCredentials): Promise<void> {
+  await signedGet<AccountsResponse>(credentials, "/main/api/v2/accounting/accounts2");
+}
+
+export async function getNicehashConnectionStatus(userScope?: StrategyUserScope): Promise<NicehashConnectionStatus> {
+  const { credentials, source, message } = await resolveCredentials(userScope);
   if (!credentials) {
     return {
-      source: "none",
       connected: false,
+      source,
+      message: message ?? "No NiceHash API credentials configured.",
+    };
+  }
+
+  try {
+    await validateNicehashCredentials(credentials);
+    return {
+      connected: true,
+      source,
+    };
+  } catch (error) {
+    return {
+      connected: false,
+      source,
+      message: error instanceof Error ? error.message : "Unable to connect to NiceHash.",
+    };
+  }
+}
+
+export async function storeNicehashCredentials(
+  userScope: StrategyUserScope,
+  credentials: NicehashCredentials
+): Promise<NicehashConnectionStatus> {
+  await userCredentialStore.storeNicehashCredentials(credentials, userScope);
+  return getNicehashConnectionStatus(userScope);
+}
+
+export async function clearNicehashCredentials(userScope: StrategyUserScope): Promise<NicehashConnectionStatus> {
+  await userCredentialStore.deleteNicehashCredentials(userScope);
+  return getNicehashConnectionStatus(userScope);
+}
+
+export async function getNicehashAccountSnapshot(userScope?: StrategyUserScope): Promise<NicehashAccountSnapshot> {
+  const { credentials, source, message } = await resolveCredentials(userScope);
+  if (!credentials) {
+    return {
+      source,
+      connected: false,
+      message: message ?? "No NiceHash API credentials configured.",
       totalBtc: null,
       assets: [],
     };
@@ -716,14 +795,14 @@ export async function getNicehashAccountSnapshot(): Promise<NicehashAccountSnaps
     const totalBtc = getTotalBtcBalance(response.total, assets);
 
     return {
-      source: "env",
+      source,
       connected: true,
       totalBtc,
       assets,
     };
   } catch (error) {
     return {
-      source: "env",
+      source,
       connected: false,
       message: error instanceof Error ? error.message : "Unable to connect to NiceHash.",
       totalBtc: null,
@@ -732,12 +811,13 @@ export async function getNicehashAccountSnapshot(): Promise<NicehashAccountSnaps
   }
 }
 
-export async function getNicehashMiningSnapshot(): Promise<NicehashMiningSnapshot> {
-  const credentials = getCredentialsFromEnv();
+export async function getNicehashMiningSnapshot(userScope?: StrategyUserScope): Promise<NicehashMiningSnapshot> {
+  const { credentials, source, message } = await resolveCredentials(userScope);
   if (!credentials) {
     return {
-      source: "none",
+      source,
       connected: false,
+      message: message ?? "No NiceHash API credentials configured.",
       miningAddress: null,
       assignedMiners: null,
       activeMiners: null,
@@ -780,7 +860,7 @@ export async function getNicehashMiningSnapshot(): Promise<NicehashMiningSnapsho
       rigsData.unpaidAmountBTC ?? sumNullableNumbers(miners.map((miner) => miner.unpaidAmountBTC));
 
     return {
-      source: "env",
+      source,
       connected: true,
       miningAddress,
       assignedMiners: rigsData.totalRigs,
@@ -794,7 +874,7 @@ export async function getNicehashMiningSnapshot(): Promise<NicehashMiningSnapsho
     };
   } catch (error) {
     return {
-      source: "env",
+      source,
       connected: false,
       message: error instanceof Error ? error.message : "Unable to fetch NiceHash mining data.",
       miningAddress: null,

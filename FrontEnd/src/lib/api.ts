@@ -18,8 +18,10 @@ import type {
   MinerHistoryResponse,
   MinerLiveResponse,
   MinerPoolsResponse,
+  MinerResponse,
   MinersResponse,
   NicehashOverviewResponse,
+  NicehashConnectionStatus,
   OrdersResponse,
   PortfolioAccountType,
   SessionLoginResponse,
@@ -49,6 +51,13 @@ interface ConnectRequest {
   apiKey: string;
   apiSecret: string;
   testnet: boolean;
+}
+
+interface NicehashConnectRequest {
+  apiKey: string;
+  apiSecret: string;
+  organizationId: string;
+  apiHost?: string;
 }
 
 function withQuery(path: string, query?: Record<string, string | undefined>): string {
@@ -225,6 +234,16 @@ export const backendApi = {
     apiRequest<ConnectionStatus>("/api/binance/connection", {
       method: "DELETE",
     }),
+  getNicehashConnection: () => apiRequest<NicehashConnectionStatus>("/api/nicehash/connection"),
+  connectNicehash: (body: NicehashConnectRequest) =>
+    apiRequest<NicehashConnectionStatus>("/api/nicehash/connection", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  disconnectNicehash: () =>
+    apiRequest<NicehashConnectionStatus>("/api/nicehash/connection", {
+      method: "DELETE",
+    }),
   getDemoAccountSettings: () =>
     apiRequest<DemoAccountSettingsResponse>("/api/strategy-settings/demo-account"),
   updateDemoAccountSettings: (balance: number) =>
@@ -292,4 +311,4 @@ export const backendApi = {
     apiRequest<BacktestMetricsResponse>(`/api/backtests/${backtestId}/metrics`),
 };
 
-export type { ConnectRequest };
+export type { ConnectRequest, NicehashConnectRequest };

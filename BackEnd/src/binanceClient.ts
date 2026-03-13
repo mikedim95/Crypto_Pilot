@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { BinanceCredentials, ConnectionSource, ConnectionStatus } from "./types.js";
+import type { StrategyUserScope } from "./strategy/strategy-user-scope.js";
+import { userCredentialStore } from "./user-credentials/user-credential-store.js";
 
 const BINANCE_PROD_BASE_URL = "https://api.binance.com";
 const BINANCE_TESTNET_BASE_URL = "https://testnet.binance.vision";
@@ -33,9 +35,38 @@ export function clearSessionCredentials(): void {
   sessionCredentials = null;
 }
 
-export function getActiveCredentials(): { credentials: BinanceCredentials | null; source: ConnectionSource } {
-  if (sessionCredentials) {
-    return { credentials: sessionCredentials, source: "session" };
+async function resolveStoredCredentials(
+  userScope?: StrategyUserScope
+): Promise<{ credentials: BinanceCredentials | null; source: ConnectionSource; message?: string }> {
+  if (!userScope) {
+    return { credentials: null, source: "none" };
+  }
+
+  const lookup = await userCredentialStore.getBinanceCredentials(userScope);
+  if (!lookup.exists) {
+    return { credentials: null, source: "none" };
+  }
+
+  if (!lookup.value) {
+    return {
+      credentials: null,
+      source: "stored",
+      message: lookup.error ?? "Stored Binance credentials are unavailable.",
+    };
+  }
+
+  return {
+    credentials: lookup.value,
+    source: "stored",
+  };
+}
+
+export async function getActiveCredentials(
+  userScope?: StrategyUserScope
+): Promise<{ credentials: BinanceCredentials | null; source: ConnectionSource; message?: string }> {
+  const stored = await resolveStoredCredentials(userScope);
+  if (stored.source === "stored") {
+    return stored;
   }
 
   const envCredentials = getEnvCredentials();
@@ -163,15 +194,15 @@ export async function validateCredentials(credentials: BinanceCredentials): Prom
   await signedGet<{ makerCommission: number }>("/api/v3/account", {}, credentials);
 }
 
-export async function getConnectionStatus(): Promise<ConnectionStatus> {
-  const { credentials, source } = getActiveCredentials();
+export async function getConnectionStatus(userScope?: StrategyUserScope): Promise<ConnectionStatus> {
+  const { credentials, source, message } = await getActiveCredentials(userScope);
 
   if (!credentials) {
     return {
       connected: false,
       source,
       testnet: false,
-      message: "No Binance API credentials configured.",
+      message: message ?? "No Binance API credentials configured.",
     };
   }
 
@@ -190,4 +221,17 @@ export async function getConnectionStatus(): Promise<ConnectionStatus> {
       message: error instanceof Error ? error.message : "Unable to validate Binance credentials.",
     };
   }
+}
+
+export async function storeUserCredentials(
+  userScope: StrategyUserScope,
+  credentials: BinanceCredentials
+): Promise<ConnectionStatus> {
+  await userCredentialStore.storeBinanceCredentials(credentials, userScope);
+  return getConnectionStatus(userScope);
+}
+
+export async function clearUserCredentials(userScope: StrategyUserScope): Promise<ConnectionStatus> {
+  await userCredentialStore.deleteBinanceCredentials(userScope);
+  return getConnectionStatus(userScope);
 }

@@ -34,8 +34,14 @@ export interface Activity {
 
 export interface ConnectionStatus {
   connected: boolean;
-  source: "none" | "env" | "session";
+  source: "none" | "env" | "session" | "stored";
   testnet: boolean;
+  message?: string;
+}
+
+export interface NicehashConnectionStatus {
+  connected: boolean;
+  source: "none" | "env" | "session" | "stored";
   message?: string;
 }
 
@@ -292,7 +298,7 @@ export interface MiningOverviewResponse {
 }
 
 export interface NicehashOverviewResponse {
-  source: "none" | "env";
+  source: "none" | "env" | "session" | "stored";
   connected: boolean;
   message?: string;
   poolStatus: string | null;

@@ -1,4 +1,5 @@
 import { MinerBasicInfo, MiningOverviewResponse, NicehashOverviewResponse } from "./types.js";
+import type { StrategyUserScope } from "./strategy/strategy-user-scope.js";
 import { getNicehashAccountSnapshot, getNicehashMiningSnapshot } from "./nicehashClient.js";
 
 const INACTIVE_STATUSES = new Set(["offline", "rebooting"]);
@@ -224,10 +225,14 @@ export function getMiningOverviewData(): MiningOverviewResponse {
   };
 }
 
-export async function getNicehashOverviewData(): Promise<NicehashOverviewResponse> {
+export async function getNicehashOverviewData(userScope?: StrategyUserScope): Promise<NicehashOverviewResponse> {
   const envMiners = parseMinersFromEnv().filter((miner) => miner.pool?.toLowerCase().includes("nicehash"));
-  const [account, mining] = await Promise.all([getNicehashAccountSnapshot(), getNicehashMiningSnapshot()]);
-  const miners = mining.miners.length > 0 ? mining.miners : envMiners;
+  const [account, mining] = await Promise.all([
+    getNicehashAccountSnapshot(userScope),
+    getNicehashMiningSnapshot(userScope),
+  ]);
+  const usingStoredCredentials = mining.source === "stored" || account.source === "stored";
+  const miners = mining.miners.length > 0 ? mining.miners : usingStoredCredentials ? [] : envMiners;
 
   const connectedOverride = parseBoolean(process.env.NICEHASH_CONNECTED);
   const poolStatus = parseString(process.env.NICEHASH_POOL_STATUS);
@@ -261,8 +266,8 @@ export async function getNicehashOverviewData(): Promise<NicehashOverviewRespons
     parseString(process.env.NICEHASH_POOL_URL) !== null ||
     parseString(process.env.NICEHASH_ALGORITHM) !== null ||
     miners.length > 0 ||
-    account.source === "env" ||
-    mining.source === "env";
+    account.source !== "none" ||
+    mining.source !== "none";
 
   const connected =
     connectedOverride ??
@@ -272,9 +277,9 @@ export async function getNicehashOverviewData(): Promise<NicehashOverviewRespons
 
   const message = !hasSource
     ? "No NiceHash data source configured."
-    : mining.source === "env" && !mining.connected
+    : mining.source !== "none" && !mining.connected
       ? mining.message
-      : account.source === "env" && !account.connected && !mining.connected
+      : account.source !== "none" && !account.connected && !mining.connected
         ? account.message
         : undefined;
 
@@ -287,7 +292,7 @@ export async function getNicehashOverviewData(): Promise<NicehashOverviewRespons
   const poolUrl = parseString(process.env.NICEHASH_POOL_URL);
 
   return {
-    source: hasSource ? "env" : "none",
+    source: mining.source !== "none" ? mining.source : account.source !== "none" ? account.source : hasSource ? "env" : "none",
     connected,
     message,
     poolStatus: poolStatus ?? (hasSource ? (connected ? "Connected" : "Disconnected") : null),

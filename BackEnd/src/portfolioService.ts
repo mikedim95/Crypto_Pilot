@@ -1,5 +1,6 @@
 import { createFallbackDashboard, createFallbackOrders } from "./mockData.js";
 import { getActiveCredentials, getConnectionStatus, publicGet, signedGet } from "./binanceClient.js";
+import type { StrategyUserScope } from "./strategy/strategy-user-scope.js";
 import {
   Activity,
   Asset,
@@ -431,9 +432,9 @@ async function buildOrders(assets: Asset[], credentials: BinanceCredentials): Pr
     .map(({ timestamp: _timestamp, ...order }): Order => order);
 }
 
-export async function getDashboardData(): Promise<DashboardResponse> {
-  const connection = await getConnectionStatus();
-  const { credentials } = getActiveCredentials();
+export async function getDashboardData(userScope?: StrategyUserScope): Promise<DashboardResponse> {
+  const connection = await getConnectionStatus(userScope);
+  const { credentials } = await getActiveCredentials(userScope);
 
   if (!connection.connected || !credentials) {
     return createFallbackDashboard(connection);
@@ -493,9 +494,9 @@ export async function getDashboardData(): Promise<DashboardResponse> {
   }
 }
 
-export async function getOrdersData(): Promise<OrdersResponse> {
-  const connection = await getConnectionStatus();
-  const { credentials } = getActiveCredentials();
+export async function getOrdersData(userScope?: StrategyUserScope): Promise<OrdersResponse> {
+  const connection = await getConnectionStatus(userScope);
+  const { credentials } = await getActiveCredentials(userScope);
 
   if (!connection.connected || !credentials) {
     return createFallbackOrders(connection);
