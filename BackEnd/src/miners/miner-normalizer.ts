@@ -122,6 +122,24 @@ function firstString(record: Record<string, unknown> | null | undefined, ...keys
 }
 
 function readHashrateAsThs(record: Record<string, unknown>): number | null {
+  const normalizedDirect =
+    normalizeHashrateToThs(
+      firstNumber(
+        record,
+        "average_hashrate",
+        "instant_hashrate",
+        "hashrate_ths",
+        "rate_ths",
+        "hr_average",
+        "hr_realtime",
+        "hr_nominal",
+        "hr_stock"
+      )
+    ) ?? null;
+  if (normalizedDirect !== null) {
+    return normalizedDirect;
+  }
+
   const directThs =
     firstNumber(record, "hashrate_ths", "rate_ths", "THS 5s", "THS av", "ths", "ths_5s", "ths_avg") ??
     firstNumber(record, "hashrate", "rate");
@@ -395,6 +413,7 @@ export function normalizeMinerLiveData(params: {
   const devRecords = recordsFromUnknown(cgminerDevs);
   const fanRecords = [
     ...recordsFromUnknown(readField(summaryRecord, "miner.fans", "fans")),
+    ...recordsFromUnknown(readField(summaryRecord, "miner.cooling.fans", "cooling.fans")),
     ...recordsFromUnknown(readField(infoRecord, "miner.fans", "fans")),
   ];
   const thermalRecords = [
@@ -425,7 +444,10 @@ export function normalizeMinerLiveData(params: {
       "boardTemp",
       "temp_board",
       "pcb_temp",
+      "pcb_temp.max",
+      "pcb_temp.min",
       "temp_pcb",
+      "sensor.pcb_temp",
       "Temperature",
       "Temp",
       "temperature",
@@ -450,9 +472,13 @@ export function normalizeMinerLiveData(params: {
     ...collectTemperatures(thermalRecords, [
       "hotspot_temp",
       "hotspotTemp",
+      "chip_temp",
+      "chip_temp.max",
+      "chip_temp.min",
       "chip_temp_max",
       "max_chip_temp",
       "Chip Temp Max",
+      "sensor.chip_temp",
       "temperature.max",
       "temp_max",
       "temperature.hotspot",
@@ -477,6 +503,9 @@ export function normalizeMinerLiveData(params: {
     ...collectTemperatures(thermalRecords, ["chip_temp_avg", "chipTempAvg", "Chip Temp Avg"]).map(
       (value, index) => `Chip ${index + 1} avg: ${value}C`
     ),
+    ...collectTemperatures(thermalRecords, ["chip_temp", "chip_temp.max", "chip_temp.min", "sensor.chip_temp"]).map(
+      (value, index) => `Chip ${index + 1}: ${value}C`
+    ),
     ...collectTemperatures(thermalRecords, ["chip_temp_max", "chipTempMax", "Chip Temp Max"]).map(
       (value, index) => `Chip ${index + 1} max: ${value}C`
     ),
@@ -493,7 +522,7 @@ export function normalizeMinerLiveData(params: {
       .map((index) => cleanTemperature(cgminerStats ? readField(cgminerStats, `temp_pcb${index}`) : undefined))
       .filter((value): value is number => value !== null)
       .map((value, index) => `PCB ${index + 1}: ${value}C`),
-    ...collectTemperatures(thermalRecords, ["pcb_temp", "pcbTemp", "board_temp", "boardTemp"]).map(
+    ...collectTemperatures(thermalRecords, ["pcb_temp", "pcb_temp.max", "pcb_temp.min", "pcbTemp", "board_temp", "boardTemp", "sensor.pcb_temp"]).map(
       (value, index) => `PCB ${index + 1}: ${value}C`
     ),
     ...collectTemperatureLists(thermalRecords, ["pcb_temps", "pcbTemps", "board_temps", "boardTemps"]).map(
@@ -566,7 +595,7 @@ export function normalizeMinerLiveData(params: {
     pcbTempStrings,
     fanPwm:
       cleanInteger(cgminerStats ? readField(cgminerStats, "fan_pwm") : undefined) ??
-      firstInteger(summaryMiner, "fan_pwm", "fan_percent") ??
+      firstInteger(summaryMiner, "fan_pwm", "fan_percent", "cooling.fan_duty") ??
       collectIntegers(fanRecords, ["pwm", "fan_pwm", "percent", "duty"])[0] ??
       collectIntegers(thermalRecords, ["fan_pwm", "fanPwm", "fan_percent", "Fan Percent"])[0] ??
       null,
