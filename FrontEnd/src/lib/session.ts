@@ -2,14 +2,16 @@ import type { AppSession } from "@/types/api";
 
 const SESSION_STORAGE_KEY = "mytrader_session";
 
-function canUseSessionStorage(): boolean {
-  return typeof window !== "undefined" && typeof window.sessionStorage !== "undefined";
+function canUseStorage(): boolean {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 }
 
 export function getStoredSession(): AppSession | null {
-  if (!canUseSessionStorage()) return null;
+  if (!canUseStorage()) return null;
 
-  const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+  const raw =
+    window.localStorage.getItem(SESSION_STORAGE_KEY) ??
+    window.sessionStorage.getItem(SESSION_STORAGE_KEY);
   if (!raw) return null;
 
   try {
@@ -30,17 +32,23 @@ export function getStoredSession(): AppSession | null {
 }
 
 export function setStoredSession(session: AppSession): void {
-  if (!canUseSessionStorage()) return;
-  window.sessionStorage.setItem(
-    SESSION_STORAGE_KEY,
-    JSON.stringify({
-      ...session,
-      username: session.username.trim().toLowerCase(),
-    })
-  );
+  if (!canUseStorage()) return;
+
+  const serialized = JSON.stringify({
+    ...session,
+    username: session.username.trim().toLowerCase(),
+  });
+
+  window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
+  if (typeof window.sessionStorage !== "undefined") {
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  }
 }
 
 export function clearStoredSession(): void {
-  if (!canUseSessionStorage()) return;
-  window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  if (!canUseStorage()) return;
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  if (typeof window.sessionStorage !== "undefined") {
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  }
 }

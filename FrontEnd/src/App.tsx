@@ -6,7 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { LoginModal } from "@/components/LoginModal";
 import { backendApi } from "@/lib/api";
-import { clearStoredSession, setStoredSession } from "@/lib/session";
+import { clearStoredSession, getStoredSession, setStoredSession } from "@/lib/session";
 import type { AppSession, SessionStatusResponse } from "@/types/api";
 import Index from "./pages/Index.tsx";
 import NotFound from "./pages/NotFound.tsx";
@@ -24,13 +24,9 @@ function resolveStatusFromError(error: unknown): SessionStatusResponse | undefin
 
 function AppRoutes() {
   const reactQueryClient = useQueryClient();
-  const [session, setSession] = useState<AppSession | null>(null);
+  const [session, setSession] = useState<AppSession | null>(() => getStoredSession());
   const [loginError, setLoginError] = useState<string | undefined>();
   const [statusOverride, setStatusOverride] = useState<SessionStatusResponse | undefined>();
-
-  useEffect(() => {
-    clearStoredSession();
-  }, []);
 
   const sessionStatusQuery = useQuery({
     queryKey: ["session-status"],
@@ -39,6 +35,11 @@ function AppRoutes() {
     refetchInterval: 30_000,
     retry: false,
   });
+
+  useEffect(() => {
+    if (!session) return;
+    setStoredSession(session);
+  }, [session]);
 
   const loginMutation = useMutation({
     mutationFn: backendApi.loginSession,
