@@ -16,7 +16,7 @@ import {
   MinerRecord,
   MinerUpdateInput,
 } from "./types.js";
-import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord } from "./miner-utils.js";
+import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord, toMysqlDateTime } from "./miner-utils.js";
 
 export class MinerRepository {
   private initPromise: Promise<void> | null = null;
@@ -136,7 +136,7 @@ export class MinerRepository {
           input.currentPreset ?? null,
           input.isEnabled ?? true,
           input.verificationStatus,
-          input.lastSeenAt ?? null,
+          toMysqlDateTime(input.lastSeenAt),
           input.lastError ?? null,
           input.capabilities ? JSON.stringify(input.capabilities) : null,
         ]
@@ -170,7 +170,7 @@ export class MinerRepository {
       if ("currentPreset" in patch) push("current_preset", patch.currentPreset ?? null);
       if (typeof patch.isEnabled === "boolean") push("is_enabled", patch.isEnabled);
       if (typeof patch.verificationStatus === "string") push("verification_status", patch.verificationStatus);
-      if ("lastSeenAt" in patch) push("last_seen_at", patch.lastSeenAt ?? null);
+      if ("lastSeenAt" in patch) push("last_seen_at", toMysqlDateTime(patch.lastSeenAt));
       if ("lastError" in patch) push("last_error", patch.lastError ?? null);
       if ("capabilities" in patch) push("capabilities_json", patch.capabilities ? JSON.stringify(patch.capabilities) : null);
 

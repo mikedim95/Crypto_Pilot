@@ -14,6 +14,24 @@ export function buildApiBaseUrl(ip: string): string {
   return `http://${ip.trim()}/api/v1`;
 }
 
+export function toMysqlDateTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new Error(`Invalid datetime value: ${value}`);
+  }
+
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getUTCDate()).padStart(2, "0");
+  const hour = String(parsed.getUTCHours()).padStart(2, "0");
+  const minute = String(parsed.getUTCMinutes()).padStart(2, "0");
+  const second = String(parsed.getUTCSeconds()).padStart(2, "0");
+
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
 export function toBoolean(value: boolean | number): boolean {
   return value === true || value === 1;
 }
