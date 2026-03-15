@@ -108,6 +108,38 @@ function getDefaultBrushWindow(scope: FleetHistoryScope, rowCount: number) {
   return { startIndex, endIndex };
 }
 
+function clampBrushIndex(value: number, rowCount: number): number {
+  if (!Number.isFinite(value)) {
+    return Math.max(0, rowCount - 1);
+  }
+
+  const normalized = Math.trunc(value);
+  return Math.max(0, Math.min(Math.max(0, rowCount - 1), normalized));
+}
+
+function normalizeBrushWindow(
+  next: { startIndex?: number; endIndex?: number } | undefined,
+  previous: { startIndex: number; endIndex: number },
+  rowCount: number
+) {
+  if (rowCount <= 0) {
+    return { startIndex: 0, endIndex: 0 };
+  }
+
+  const safeStart = Number.isFinite(next?.startIndex)
+    ? clampBrushIndex(next?.startIndex as number, rowCount)
+    : previous.startIndex;
+  const safeEnd = Number.isFinite(next?.endIndex)
+    ? clampBrushIndex(next?.endIndex as number, rowCount)
+    : previous.endIndex;
+
+  if (safeStart <= safeEnd) {
+    return { startIndex: safeStart, endIndex: safeEnd };
+  }
+
+  return { startIndex: safeEnd, endIndex: safeStart };
+}
+
 function ChartCard({
   title,
   subtitle,
@@ -192,22 +224,21 @@ function ChartCard({
                 isAnimationActive={false}
               />
             ))}
-            <Brush
-              dataKey="timestamp"
-              startIndex={brushWindow.startIndex}
-              endIndex={brushWindow.endIndex}
-              onChange={(next) =>
-                setBrushWindow({
-                  startIndex: typeof next?.startIndex === "number" ? next.startIndex : brushWindow.startIndex,
-                  endIndex: typeof next?.endIndex === "number" ? next.endIndex : brushWindow.endIndex,
-                })
-              }
-              height={26}
-              travellerWidth={10}
-              stroke="#00f5d4"
-              fill="rgba(10, 14, 26, 0.9)"
-              tickFormatter={(value) => formatAxisTime(String(value), scope)}
-            />
+            {rows.length > 1 ? (
+              <Brush
+                dataKey="timestamp"
+                startIndex={brushWindow.startIndex}
+                endIndex={brushWindow.endIndex}
+                onChange={(next) =>
+                  setBrushWindow((previous) => normalizeBrushWindow(next, previous, rows.length))
+                }
+                height={26}
+                travellerWidth={10}
+                stroke="#00f5d4"
+                fill="rgba(10, 14, 26, 0.9)"
+                tickFormatter={(value) => formatAxisTime(String(value), scope)}
+              />
+            ) : null}
           </LineChart>
         </ResponsiveContainer>
       ) : (

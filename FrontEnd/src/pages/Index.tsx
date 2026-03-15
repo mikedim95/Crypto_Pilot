@@ -45,7 +45,7 @@ const Index = ({ session, onLogout }: IndexProps) => {
       case "trading":
         return <TradingPage accountType={accountType} />;
       case "rebalance":
-        return <RebalancePage />;
+        return <RebalancePage accountType={accountType} />;
       case "automation":
         return <AutomationPage accountType={accountType} />;
       case "asic-miners":

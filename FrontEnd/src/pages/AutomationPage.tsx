@@ -1188,7 +1188,7 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
   const [slippagePct, setSlippagePct] = useState("0.001");
 
   const readOnlyStrategies = useMemo(
-    () => strategies.filter((strategy) => !strategy.baseStrategies || strategy.baseStrategies.length === 0),
+    () => strategies.filter((strategy) => BASIC_STRATEGY_IDS.has(strategy.id)),
     [strategies]
   );
   const baseStrategyOptions = useMemo(
@@ -1196,7 +1196,7 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
     [readOnlyStrategies]
   );
   const usableStrategies = useMemo(
-    () => strategies.filter((strategy) => (strategy.baseStrategies?.length ?? 0) > 0),
+    () => strategies.filter((strategy) => !BASIC_STRATEGY_IDS.has(strategy.id)),
     [strategies]
   );
 
@@ -1759,7 +1759,9 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
                     onClick={() => setSelectedStrategyId(strategy.id)}
                   >
                     <td className="py-3 px-4 text-left text-xs font-mono text-foreground">{strategy.name}</td>
-                    <td className="py-3 px-4 text-right text-xs font-mono text-muted-foreground">{(strategy.baseStrategies ?? []).join(", ") || "--"}</td>
+                    <td className="py-3 px-4 text-right text-xs font-mono text-muted-foreground">
+                      {formatUsedBaseStrategiesSummary(strategy)}
+                    </td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{strategy.executionMode}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono"><span className={strategy.isEnabled ? "text-positive" : "text-muted-foreground"}>{strategy.isEnabled ? "Yes" : "No"}</span></td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{strategy.scheduleInterval}</td>

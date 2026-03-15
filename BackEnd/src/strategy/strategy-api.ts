@@ -142,7 +142,8 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
   });
 
   router.delete("/strategies/:id", async (req, res) => {
-    const existing = await deps.repository.getStrategy(req.params.id);
+    const userScope = resolveStrategyUserScope(req);
+    const existing = await deps.repository.getStrategy(req.params.id, userScope);
     if (!existing) {
       sendNotFound(res, "Strategy", req.params.id);
       return;
@@ -153,7 +154,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
       return;
     }
 
-    await deps.repository.deleteStrategy(req.params.id);
+    await deps.repository.deleteStrategy(req.params.id, userScope);
     res.json({ success: true });
   });
 

@@ -4,6 +4,7 @@ import { Pie, PieChart, Cell, ResponsiveContainer } from "recharts";
 import { backendApi } from "@/lib/api";
 import { useStrategies, useStrategyState } from "@/hooks/useTradingData";
 import { cn } from "@/lib/utils";
+import type { PortfolioAccountType } from "@/types/api";
 
 const CHART_COLORS = [
   "hsl(168, 100%, 48%)",
@@ -35,11 +36,25 @@ function formatUsd(value: number | undefined): string {
   return value.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-export function RebalancePage() {
+const BASIC_STRATEGY_IDS = new Set<string>([
+  "mean-reversion",
+  "periodic-rebalancing",
+  "relative-strength-rotation",
+  "drawdown-protection",
+  "volatility-hedge",
+  "btc-dominance-rotation",
+  "momentum-rotation",
+]);
+
+interface RebalancePageProps {
+  accountType: PortfolioAccountType;
+}
+
+export function RebalancePage({ accountType }: RebalancePageProps) {
   const queryClient = useQueryClient();
 
   const { data: strategiesData, isPending: loadingStrategies, error: strategiesError } = useStrategies();
-  const strategies = strategiesData?.strategies ?? [];
+  const strategies = (strategiesData?.strategies ?? []).filter((strategy) => !BASIC_STRATEGY_IDS.has(strategy.id));
 
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>("");
   const [message, setMessage] = useState<string>("");
@@ -60,18 +75,18 @@ export function RebalancePage() {
     data: state,
     isPending: loadingState,
     error: stateError,
-  } = useStrategyState(selectedStrategyId || undefined);
+  } = useStrategyState(selectedStrategyId || undefined, accountType);
 
   const runNowMutation = useMutation({
-    mutationFn: (strategyId: string) => backendApi.runStrategyNow(strategyId),
+    mutationFn: (strategyId: string) => backendApi.runStrategyNow(strategyId, accountType),
     onSuccess: async (result) => {
       setErrorMessage("");
       setMessage(`Strategy run created with status: ${result.run.status}.`);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["strategy-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["strategy-runs", accountType] }),
         queryClient.invalidateQueries({ queryKey: ["strategies"] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId] }),
+        queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId, accountType] }),
+        queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId, accountType] }),
       ]);
     },
     onError: (error) => {
