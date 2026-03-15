@@ -300,6 +300,10 @@ export const backendApi = {
     apiRequest<StrategyRunResponse>(withQuery(`/api/strategies/${strategyId}/run-now`, { accountType }), {
       method: "POST",
     }),
+  executeStrategyRebalance: (strategyId: string, accountType: PortfolioAccountType = "demo") =>
+    apiRequest<StrategyRunResponse>(withQuery(`/api/strategies/${strategyId}/execute-rebalance`, { accountType }), {
+      method: "POST",
+    }),
   getStrategyState: (strategyId: string, accountType: PortfolioAccountType = "real") =>
     apiRequest<StrategyStateResponse>(withQuery(`/api/strategies/${strategyId}/state`, { accountType })),
   getStrategyExecutionPlan: (strategyId: string, accountType: PortfolioAccountType = "real") =>

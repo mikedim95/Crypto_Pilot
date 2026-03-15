@@ -222,6 +222,16 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
     }
   });
 
+  router.post("/strategies/:id/execute-rebalance", async (req, res) => {
+    try {
+      const userScope = resolveStrategyUserScope(req);
+      const run = await deps.runner.executeStrategy(req.params.id, "api", parseAccountType(req), userScope);
+      res.json({ run });
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Unable to execute rebalance." });
+    }
+  });
+
   router.get("/strategies/:id/state", async (req, res) => {
     try {
       const accountType = parseAccountType(req);

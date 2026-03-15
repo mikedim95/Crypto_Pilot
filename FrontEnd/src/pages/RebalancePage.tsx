@@ -77,21 +77,47 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     error: stateError,
   } = useStrategyState(selectedStrategyId || undefined, accountType);
 
+  const invalidateRebalanceQueries = async (): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["strategy-runs", accountType] }),
+      queryClient.invalidateQueries({ queryKey: ["strategies"] }),
+      queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId, accountType] }),
+      queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId, accountType] }),
+      queryClient.invalidateQueries({ queryKey: ["dashboard", accountType] }),
+      queryClient.invalidateQueries({ queryKey: ["demo-account-settings"] }),
+    ]);
+  };
+
   const runNowMutation = useMutation({
     mutationFn: (strategyId: string) => backendApi.runStrategyNow(strategyId, accountType),
     onSuccess: async (result) => {
       setErrorMessage("");
-      setMessage(`Strategy run created with status: ${result.run.status}.`);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["strategy-runs", accountType] }),
-        queryClient.invalidateQueries({ queryKey: ["strategies"] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-state", selectedStrategyId, accountType] }),
-        queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", selectedStrategyId, accountType] }),
-      ]);
+      setMessage(`Strategy evaluation completed with status: ${result.run.status}. No trades were executed.`);
+      await invalidateRebalanceQueries();
     },
     onError: (error) => {
       setMessage("");
       setErrorMessage(error instanceof Error ? error.message : "Unable to run strategy.");
+    },
+  });
+
+  const executeRebalanceMutation = useMutation({
+    mutationFn: (strategyId: string) => backendApi.executeStrategyRebalance(strategyId, accountType),
+    onSuccess: async (result) => {
+      setErrorMessage("");
+      const executionApplied = result.run.warnings.some((warning) =>
+        warning.toLowerCase().includes("demo rebalance executed")
+      );
+      setMessage(
+        executionApplied
+          ? "Demo rebalance executed. Holdings were refreshed using current market prices."
+          : `Rebalance execution completed with status: ${result.run.status}.`
+      );
+      await invalidateRebalanceQueries();
+    },
+    onError: (error) => {
+      setMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to execute rebalance.");
     },
   });
 
@@ -131,14 +157,28 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     runNowMutation.mutate(selectedStrategy.id);
   };
 
+  const handleExecuteRebalance = (): void => {
+    if (!selectedStrategy) return;
+    executeRebalanceMutation.mutate(selectedStrategy.id);
+  };
+
   const rebalanceRequired = executionPlan?.rebalanceRequired ?? false;
+  const canExecuteRebalance =
+    accountType === "demo" &&
+    Boolean(selectedStrategy) &&
+    rebalanceRequired &&
+    !loadingState &&
+    !runNowMutation.isPending &&
+    !executeRebalanceMutation.isPending;
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
         <div>
           <h2 className="text-lg font-mono font-semibold text-foreground">Rebalance</h2>
-          <p className="text-sm text-muted-foreground mt-1">Evaluate strategy output and review suggested rebalance trades.</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Evaluate strategy output, review the trade plan, and execute demo reallocations at current market prices.
+          </p>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -157,12 +197,24 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
 
           <button
             onClick={handleEvaluate}
-            disabled={!selectedStrategy || runNowMutation.isPending}
+            disabled={!selectedStrategy || runNowMutation.isPending || executeRebalanceMutation.isPending}
             className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-xs font-mono font-semibold hover:opacity-90 disabled:opacity-60"
           >
             Evaluate Now
           </button>
+
+          <button
+            onClick={handleExecuteRebalance}
+            disabled={!canExecuteRebalance}
+            className="px-4 py-2 rounded-md border border-border text-xs font-mono font-semibold text-foreground hover:bg-secondary disabled:opacity-60"
+          >
+            Execute Demo Rebalance
+          </button>
         </div>
+      </div>
+
+      <div className="text-[11px] font-mono text-muted-foreground">
+        Evaluate only computes the plan. Execute applies the current target allocation to demo holdings using live market prices.
       </div>
 
       {message ? (
