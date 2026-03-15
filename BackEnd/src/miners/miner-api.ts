@@ -2,7 +2,7 @@ import express, { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import { MinerCommandService } from "./miner-command-service.js";
 import { MinerCryptoService } from "./miner-crypto-service.js";
-import { buildMinerLiveDataFromSnapshot, liveDataToSnapshotRaw, normalizePoolsForStorage } from "./miner-normalizer.js";
+import { buildMinerLiveDataFromSnapshot, liveDataToSnapshotRaw, normalizePoolsForStorage, normalizePresetOptions } from "./miner-normalizer.js";
 import { MinerPollingService } from "./miner-polling-service.js";
 import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
@@ -32,6 +32,10 @@ const switchPoolSchema = z.object({
 
 const rebootSchema = z.object({
   after: z.coerce.number().int().min(0).max(60).default(3),
+});
+
+const setPowerLimitSchema = z.object({
+  preset: z.string().trim().min(1).max(120),
 });
 
 const historyQuerySchema = z.object({
@@ -227,11 +231,15 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const snapshot = await deps.repository.getLatestSnapshot(miner.id);
       const pools = await deps.repository.listPools(miner.id);
       const commands = await deps.repository.listCommands(miner.id);
+      const presets = normalizePresetOptions(
+        await deps.readService.readPayload<unknown[]>(miner, "/autotune/presets", { authenticated: true }).catch(() => [])
+      );
 
       res.json({
         miner,
         liveData: buildMinerLiveDataFromSnapshot(miner, snapshot, pools),
         pools,
+        presets,
         commands,
       });
     })
@@ -411,7 +419,33 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (req, res) => {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
-      await proxyRead(res, params.id, "/autotune/presets", { authenticated: true });
+
+      const miner = await getMinerOrRespond(params.id, res);
+      if (!miner) return;
+
+      const startedAt = Date.now();
+      try {
+        const presets = await deps.readService.readPayload<unknown[]>(miner, "/autotune/presets", { authenticated: true });
+        res.json(proxyEnvelope(miner.id, normalizePresetOptions(presets), Date.now() - startedAt));
+      } catch (error) {
+        res.status(502).json({
+          ok: false,
+          error: "upstream_error",
+          message: error instanceof Error ? error.message : "Failed to read autotune presets from miner.",
+        });
+      }
+    })
+  );
+
+  router.post(
+    "/miners/:id/power-limit",
+    asyncHandler(async (req, res) => {
+      const params = parseOrRespond(idParamSchema, req.params, res);
+      const body = parseOrRespond(setPowerLimitSchema, req.body, res);
+      if (!params || !body) return;
+
+      const result = await deps.commandService.setPreset(params.id, body.preset, getCreatedBy(req));
+      res.json(result);
     })
   );
 

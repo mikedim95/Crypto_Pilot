@@ -109,6 +109,17 @@ export function AsicMinersPage() {
     },
   });
 
+  const presetMutation = useMutation({
+    mutationFn: (input: { minerId: number; preset: string }) => backendApi.setMinerPreset(input.minerId, input.preset),
+    onSuccess: async () => {
+      toast.success("Preset applied.");
+      await invalidateMinerQueries();
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to apply preset.");
+    },
+  });
+
   const isLoading = loadingOverview || loadingFleet || loadingMiners;
   const miners = minersData?.miners ?? [];
   const fleetLive = fleetData?.miners ?? [];
@@ -176,9 +187,11 @@ export function AsicMinersPage() {
           details={selectedMinerDetails}
           history={selectedMinerHistory?.history ?? []}
           isCommandPending={commandMutation.isPending || switchPoolMutation.isPending}
+          isPresetPending={presetMutation.isPending}
           onClose={() => setSelectedMinerId(undefined)}
           onCommand={(action) => commandMutation.mutate({ minerId: selectedMinerDetails.miner.id, action })}
           onSwitchPool={(poolId) => switchPoolMutation.mutate({ minerId: selectedMinerDetails.miner.id, poolId })}
+          onApplyPreset={(preset) => presetMutation.mutate({ minerId: selectedMinerDetails.miner.id, preset })}
         />
       ) : null}
     </div>

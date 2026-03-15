@@ -132,6 +132,23 @@ export function AddMinerDialog({ isVerifying, isSaving, verification, onVerify, 
                   </div>
                 </div>
 
+                <div className="rounded-md border border-border bg-background/60 p-3">
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                    Available Presets {verification.presets.length > 0 ? `(${verification.presets.length})` : ""}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {verification.presets.length > 0 ? (
+                      verification.presets.map((preset) => (
+                        <span key={preset.name} className="rounded-md border border-border bg-card px-3 py-1 text-[10px] font-mono text-foreground">
+                          {preset.pretty ?? preset.name}
+                        </span>
+                      ))
+                    ) : (
+                      <div className="text-xs font-mono text-muted-foreground">No presets returned by VNish during verification.</div>
+                    )}
+                  </div>
+                </div>
+
                 {verification.error ? (
                   <div className="rounded-md border border-negative/40 bg-negative/10 px-3 py-2 text-xs font-mono text-negative">
                     {verification.error}

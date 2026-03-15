@@ -126,6 +126,22 @@ export class MinerCommandService {
     return this.runCommand(minerId, "reboot", "/system/reboot", { after }, createdBy);
   }
 
+  setPreset(minerId: number, preset: string, createdBy?: string | null) {
+    return this.runCommand(
+      minerId,
+      "set-preset",
+      "/settings",
+      {
+        miner: {
+          overclock: {
+            preset,
+          },
+        },
+      },
+      createdBy
+    );
+  }
+
   async switchPool(minerId: number, poolId: number, createdBy?: string | null) {
     const pools = await this.repository.listPools(minerId);
     const targetPool = pools.find((pool) => pool.id === poolId);

@@ -1,5 +1,7 @@
-import { Loader2, RotateCcw, ServerCog, Square, Play, Pause, Power, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, RotateCcw, Gauge, Square, Play, Pause, Power, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MinerStatusBadge } from "./MinerStatusBadge";
 import type { MinerDetailResponse, MinerHistoryPoint } from "@/types/api";
 
@@ -7,9 +9,11 @@ interface MinerDetailPanelProps {
   details: MinerDetailResponse;
   history: MinerHistoryPoint[];
   isCommandPending: boolean;
+  isPresetPending: boolean;
   onClose: () => void;
   onCommand: (action: "restart" | "reboot" | "start" | "stop" | "pause" | "resume") => void;
   onSwitchPool: (poolId: number) => void;
+  onApplyPreset: (preset: string) => void;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -25,11 +29,20 @@ export function MinerDetailPanel({
   details,
   history,
   isCommandPending,
+  isPresetPending,
   onClose,
   onCommand,
   onSwitchPool,
+  onApplyPreset,
 }: MinerDetailPanelProps) {
-  const { miner, liveData, commands } = details;
+  const { miner, liveData, presets, commands } = details;
+  const [selectedPreset, setSelectedPreset] = useState<string>("");
+
+  useEffect(() => {
+    setSelectedPreset(liveData.presetName ?? presets[0]?.name ?? "");
+  }, [liveData.presetName, presets]);
+
+  const canApplyPreset = selectedPreset.length > 0 && selectedPreset !== (liveData.presetName ?? "") && !isPresetPending;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-background/70 backdrop-blur-sm" onClick={onClose}>
@@ -188,11 +201,60 @@ export function MinerDetailPanel({
               ))}
             </div>
 
-            <div className="flex items-center gap-3 rounded-md border border-border bg-secondary/20 p-4">
-              <ServerCog className="h-4 w-4 text-muted-foreground" />
-              <div className="font-mono text-xs text-muted-foreground">
-                Preset writes are intentionally deferred until the exact VNish `/settings` write schema is confirmed.
+            <div className="rounded-md border border-border bg-secondary/20 p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <Gauge className="h-4 w-4 text-primary" />
+                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Autotune Presets</div>
               </div>
+
+              {presets.length > 0 ? (
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                  <Select value={selectedPreset} onValueChange={setSelectedPreset} disabled={isPresetPending}>
+                    <SelectTrigger className="font-mono text-xs">
+                      <SelectValue placeholder="Choose preset" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {presets.map((preset) => (
+                        <SelectItem key={preset.name} value={preset.name} className="font-mono text-xs">
+                          {preset.pretty ?? preset.name}
+                          {preset.status ? ` | ${preset.status}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    className="font-mono text-xs"
+                    disabled={!canApplyPreset}
+                    onClick={() => onApplyPreset(selectedPreset)}
+                  >
+                    {isPresetPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Apply Preset
+                  </Button>
+                </div>
+              ) : (
+                <div className="font-mono text-xs text-muted-foreground">No presets discovered from VNish for this miner yet.</div>
+              )}
+
+              {presets.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {presets.map((preset) => {
+                    const isCurrent = preset.name === liveData.presetName;
+                    return (
+                      <span
+                        key={preset.name}
+                        className={`rounded-md px-3 py-1 text-[10px] font-mono ${
+                          isCurrent
+                            ? "bg-primary/15 text-primary border border-primary/30"
+                            : "bg-background text-muted-foreground border border-border"
+                        }`}
+                      >
+                        {preset.pretty ?? preset.name}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-md border border-border bg-secondary/20 p-4">

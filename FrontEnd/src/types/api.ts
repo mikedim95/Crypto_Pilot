@@ -192,6 +192,12 @@ export interface MinerVerificationResult {
   error: string | null;
 }
 
+export interface MinerPresetOption {
+  name: string;
+  pretty: string | null;
+  status: string | null;
+}
+
 export interface FleetOverview {
   totalMiners: number;
   onlineMiners: number;
@@ -220,6 +226,7 @@ export interface MinerDetailResponse {
   miner: MinerEntity;
   liveData: MinerLiveData;
   pools: MinerPoolEntity[];
+  presets: MinerPresetOption[];
   commands: Array<{
     id: number;
     minerId: number;

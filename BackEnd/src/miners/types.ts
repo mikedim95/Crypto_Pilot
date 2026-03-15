@@ -168,6 +168,12 @@ export interface MinerVerificationResult {
   error: string | null;
 }
 
+export interface MinerPresetOption {
+  name: string;
+  pretty: string | null;
+  status: string | null;
+}
+
 export interface MinerPoolLive {
   id: number;
   url: string;

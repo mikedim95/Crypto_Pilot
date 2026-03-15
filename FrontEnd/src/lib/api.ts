@@ -19,6 +19,7 @@ import type {
   MinerHistoryResponse,
   MinerLiveResponse,
   MinerPoolsResponse,
+  MinerPresetOption,
   MinerResponse,
   MinersResponse,
   NicehashOverviewResponse,
@@ -226,6 +227,15 @@ export const backendApi = {
       method: "POST",
       body: JSON.stringify({ poolId }),
     }),
+  setMinerPreset: (minerId: number, preset: string) =>
+    apiRequest<MinerCommandResponse>(`/api/miners/${minerId}/power-limit`, {
+      method: "POST",
+      body: JSON.stringify({ preset }),
+    }),
+  getMinerPresets: (minerId: number) =>
+    apiRequest<{ ok: boolean; minerId: string; source: string; data: MinerPresetOption[]; fetchedAt: string; latencyMs: number }>(
+      `/api/miners/${minerId}/autotune-presets`
+    ),
   getBinanceConnection: () => apiRequest<ConnectionStatus>("/api/binance/connection"),
   connectBinance: (body: ConnectRequest) =>
     apiRequest<ConnectionStatus>("/api/binance/connection", {

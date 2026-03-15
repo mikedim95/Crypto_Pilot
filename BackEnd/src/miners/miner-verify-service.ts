@@ -1,6 +1,6 @@
 import { MinerCgminerClient } from "./miner-cgminer-client.js";
 import { MinerHttpClient } from "./miner-http-client.js";
-import { extractMinerIdentity, extractPresetDetails } from "./miner-normalizer.js";
+import { extractMinerIdentity, extractPresetDetails, normalizePresetOptions } from "./miner-normalizer.js";
 import { buildApiBaseUrl, cleanString, parseJsonObject } from "./miner-utils.js";
 import { MinerEntity, MinerVerificationResult, MinerVerifyDraftInput } from "./types.js";
 
@@ -135,27 +135,7 @@ export class MinerVerifyService {
         model: identity.model,
         firmware: identity.firmware,
         capabilities,
-        presets: presets
-          .map((entry) => {
-            const record = parseJsonObject(entry);
-            if (!record) return null;
-            const name = cleanString(record.name) ?? cleanString(record.preset_name);
-            if (!name) return null;
-            return {
-              name,
-              pretty: cleanString(record.pretty) ?? cleanString(record.preset_pretty),
-              status: cleanString(record.status) ?? cleanString(record.preset_status),
-            };
-          })
-          .filter(
-            (
-              preset
-            ): preset is {
-              name: string;
-              pretty: string | null;
-              status: string | null;
-            } => preset !== null
-          ),
+        presets: normalizePresetOptions(presets),
         error,
       },
     };

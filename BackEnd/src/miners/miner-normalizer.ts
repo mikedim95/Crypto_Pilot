@@ -2,6 +2,7 @@ import {
   MinerEntity,
   MinerLiveData,
   MinerPerfSummaryPayload,
+  MinerPresetOption,
   MinerPoolEntity,
   MinerPoolLive,
   MinerSnapshotEntity,
@@ -201,6 +202,34 @@ export function extractMinerIdentity(params: {
       typeDescriptor.firmware ??
       firstString(cgminerStats, "Cgminer"),
   };
+}
+
+export function normalizePresetOptions(presets: unknown[] | null | undefined): MinerPresetOption[] {
+  if (!Array.isArray(presets)) return [];
+
+  const seen = new Set<string>();
+
+  return presets
+    .map((entry) => {
+      const record = parseJsonObject(entry);
+      if (!record) return null;
+
+      const name = cleanString(record.name) ?? cleanString(record.preset_name);
+      if (!name) return null;
+
+      return {
+        name,
+        pretty: cleanString(record.pretty) ?? cleanString(record.preset_pretty),
+        status: cleanString(record.status) ?? cleanString(record.preset_status),
+      };
+    })
+    .filter((preset): preset is MinerPresetOption => {
+      if (!preset) return false;
+      const key = preset.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 export function normalizePoolsFromCgminer(poolRows: unknown[], storedPools: MinerPoolEntity[] = []): { pools: MinerPoolLive[]; activePoolIndex: number | null } {
