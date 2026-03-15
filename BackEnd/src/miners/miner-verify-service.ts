@@ -42,13 +42,6 @@ export class MinerVerifyService {
     let unlockToken: string | null = null;
 
     try {
-      statusPayload = await this.httpClient.get<Record<string, unknown>>(apiBaseUrl, "/status");
-      httpOk = true;
-    } catch (statusError) {
-      error = statusError instanceof Error ? statusError.message : "Failed to reach VNish status endpoint.";
-    }
-
-    try {
       summary = await this.cgminerClient.summary(input.ip);
       stats = await this.cgminerClient.stats(input.ip);
       cgminerOk = true;
@@ -68,32 +61,71 @@ export class MinerVerifyService {
       }
     }
 
-    try {
-      perfSummaryPayload = await this.httpClient.get<Record<string, unknown>>(apiBaseUrl, "/perf-summary");
-      httpOk = true;
-    } catch (perfError) {
-      if (!error) {
-        error = perfError instanceof Error ? perfError.message : "Failed to read perf-summary.";
-      }
-    }
-
-    try {
-      summaryPayload = await this.httpClient.get<Record<string, unknown>>(apiBaseUrl, "/summary");
-      httpOk = true;
-    } catch {
-      // Optional payload for richer normalization.
-    }
-
-    try {
-      infoPayload = await this.httpClient.get<Record<string, unknown>>(apiBaseUrl, "/info");
-      httpOk = true;
-    } catch {
-      // Optional payload for richer normalization.
-    }
-
     if (unlockOk) {
       try {
-        presets = await this.httpClient.get<unknown[]>(apiBaseUrl, "/autotune/presets", unlockToken ?? undefined);
+        statusPayload = await this.httpClient.get<Record<string, unknown>>(
+          apiBaseUrl,
+          "/status",
+          unlockToken ?? undefined,
+          undefined,
+          "raw"
+        );
+        httpOk = true;
+      } catch (statusError) {
+        if (!error) {
+          error = statusError instanceof Error ? statusError.message : "Failed to read status.";
+        }
+      }
+
+      try {
+        perfSummaryPayload = await this.httpClient.get<Record<string, unknown>>(
+          apiBaseUrl,
+          "/perf-summary",
+          unlockToken ?? undefined,
+          undefined,
+          "raw"
+        );
+        httpOk = true;
+      } catch (perfError) {
+        if (!error) {
+          error = perfError instanceof Error ? perfError.message : "Failed to read perf-summary.";
+        }
+      }
+
+      try {
+        summaryPayload = await this.httpClient.get<Record<string, unknown>>(
+          apiBaseUrl,
+          "/summary",
+          unlockToken ?? undefined,
+          undefined,
+          "raw"
+        );
+        httpOk = true;
+      } catch {
+        // Optional payload for richer normalization.
+      }
+
+      try {
+        infoPayload = await this.httpClient.get<Record<string, unknown>>(
+          apiBaseUrl,
+          "/info",
+          unlockToken ?? undefined,
+          undefined,
+          "raw"
+        );
+        httpOk = true;
+      } catch {
+        // Optional payload for richer normalization.
+      }
+
+      try {
+        presets = await this.httpClient.get<unknown[]>(
+          apiBaseUrl,
+          "/autotune/presets",
+          unlockToken ?? undefined,
+          undefined,
+          "raw"
+        );
       } catch {
         presets = [];
       }

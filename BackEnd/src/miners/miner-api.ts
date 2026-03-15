@@ -377,7 +377,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (req, res) => {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
-      await proxyRead(res, params.id, "/status");
+      await proxyRead(res, params.id, "/status", { authenticated: true });
     })
   );
 
@@ -386,7 +386,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (req, res) => {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
-      await proxyRead(res, params.id, "/info");
+      await proxyRead(res, params.id, "/info", { authenticated: true });
     })
   );
 
@@ -395,7 +395,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (req, res) => {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
-      await proxyRead(res, params.id, "/summary");
+      await proxyRead(res, params.id, "/summary", { authenticated: true });
     })
   );
 
@@ -404,7 +404,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (req, res) => {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
-      await proxyRead(res, params.id, "/perf-summary");
+      await proxyRead(res, params.id, "/perf-summary", { authenticated: true });
     })
   );
 
@@ -413,7 +413,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (req, res) => {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
-      await proxyRead(res, params.id, "/chips");
+      await proxyRead(res, params.id, "/chips", { authenticated: true });
     })
   );
 
@@ -422,7 +422,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (req, res) => {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
-      await proxyRead(res, params.id, "/layout");
+      await proxyRead(res, params.id, "/layout", { authenticated: true });
     })
   );
 

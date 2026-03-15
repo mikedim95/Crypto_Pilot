@@ -177,6 +177,16 @@ function collectTemperatures(records: Record<string, unknown>[], keys: string[])
     .filter((value): value is number => value !== null);
 }
 
+function collectTemperatureLists(records: Record<string, unknown>[], keys: string[]): number[] {
+  return records.flatMap((record) =>
+    keys.flatMap((key) =>
+      listFromUnknown(readField(record, key))
+        .map((value) => cleanTemperature(value))
+        .filter((value): value is number => value !== null)
+    )
+  );
+}
+
 function collectStrings(records: Record<string, unknown>[], keys: string[]): string[] {
   return records
     .map((record) => cleanString(readField(record, ...keys)))
@@ -367,18 +377,37 @@ export function normalizeMinerLiveData(params: {
   } = params;
 
   const presetDetails = extractPresetDetails(perfSummaryPayload);
+  const statusRecord = statusPayload ?? EMPTY_RECORD;
   const summaryRecord = summaryPayload ?? EMPTY_RECORD;
   const infoRecord = infoPayload ?? EMPTY_RECORD;
   const chipsRecord = parseJsonObject(chipsPayload) ?? EMPTY_RECORD;
+  const statusMiner = parseJsonObject(readField(statusRecord, "miner")) ?? statusPayload;
   const summaryMiner = parseJsonObject(readField(summaryRecord, "miner")) ?? summaryPayload;
-  const summaryChains = recordsFromUnknown(readField(summaryRecord, "miner.chains", "chains"));
-  const chipsChains = recordsFromUnknown(readField(chipsRecord, "miner.chains", "chains", "chips"));
+  const statusChains = recordsFromUnknown(
+    readField(statusRecord, "miner.chains", "chains", "miner.boards", "boards", "hashboards")
+  );
+  const summaryChains = recordsFromUnknown(
+    readField(summaryRecord, "miner.chains", "chains", "miner.boards", "boards", "hashboards")
+  );
+  const chipsChains = recordsFromUnknown(
+    readField(chipsRecord, "miner.chains", "chains", "chips", "boards", "hashboards")
+  );
   const devRecords = recordsFromUnknown(cgminerDevs);
   const fanRecords = [
     ...recordsFromUnknown(readField(summaryRecord, "miner.fans", "fans")),
     ...recordsFromUnknown(readField(infoRecord, "miner.fans", "fans")),
   ];
-  const thermalRecords = [...summaryChains, ...chipsChains, ...devRecords];
+  const thermalRecords = [
+    ...recordsFromUnknown(statusRecord),
+    ...recordsFromUnknown(statusMiner),
+    ...recordsFromUnknown(summaryRecord),
+    ...recordsFromUnknown(summaryMiner),
+    ...recordsFromUnknown(chipsRecord),
+    ...statusChains,
+    ...summaryChains,
+    ...chipsChains,
+    ...devRecords,
+  ];
 
   const totalRateThs =
     normalizeHashrateToThs(cleanNumber(cgminerStats ? readField(cgminerStats, "total_rate", "Total Rate") : undefined)) ??
@@ -401,6 +430,16 @@ export function normalizeMinerLiveData(params: {
       "Temp",
       "temperature",
       "temperature.board",
+      "board.temperature",
+      "temperature.pcb",
+    ]),
+    ...collectTemperatureLists(thermalRecords, [
+      "board_temps",
+      "boardTemps",
+      "temperature.board",
+      "temperature.pcb",
+      "pcb_temps",
+      "pcbTemps",
     ]),
   ]);
 
@@ -416,6 +455,17 @@ export function normalizeMinerLiveData(params: {
       "Chip Temp Max",
       "temperature.max",
       "temp_max",
+      "temperature.hotspot",
+      "temperature.chip",
+    ]),
+    ...collectTemperatureLists(thermalRecords, [
+      "hotspot_temps",
+      "hotspotTemps",
+      "chip_temps",
+      "chipTemps",
+      "temperature.max",
+      "temperature.hotspot",
+      "temperature.chip",
     ]),
   ]);
 
@@ -430,6 +480,12 @@ export function normalizeMinerLiveData(params: {
     ...collectTemperatures(thermalRecords, ["chip_temp_max", "chipTempMax", "Chip Temp Max"]).map(
       (value, index) => `Chip ${index + 1} max: ${value}C`
     ),
+    ...collectTemperatureLists(thermalRecords, [
+      "chip_temps",
+      "chipTemps",
+      "temperature.chip",
+      "temperature.max",
+    ]).map((value, index) => `Chip ${index + 1}: ${value}C`),
   ];
 
   const pcbTempStrings = [
@@ -438,6 +494,9 @@ export function normalizeMinerLiveData(params: {
       .filter((value): value is number => value !== null)
       .map((value, index) => `PCB ${index + 1}: ${value}C`),
     ...collectTemperatures(thermalRecords, ["pcb_temp", "pcbTemp", "board_temp", "boardTemp"]).map(
+      (value, index) => `PCB ${index + 1}: ${value}C`
+    ),
+    ...collectTemperatureLists(thermalRecords, ["pcb_temps", "pcbTemps", "board_temps", "boardTemps"]).map(
       (value, index) => `PCB ${index + 1}: ${value}C`
     ),
   ];

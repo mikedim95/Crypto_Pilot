@@ -13,14 +13,6 @@ export class MinerReadService {
     private readonly authService: MinerAuthService
   ) {}
 
-  private async tryHttpGet<T>(miner: MinerEntity, path: string): Promise<T | null> {
-    try {
-      return await this.httpClient.get<T>(miner.apiBaseUrl, path);
-    } catch {
-      return null;
-    }
-  }
-
   private async tryAuthedGet<T>(miner: MinerEntity, path: string): Promise<T | null> {
     try {
       const token = await this.authService.getValidToken(miner);
@@ -28,21 +20,27 @@ export class MinerReadService {
         miner.apiBaseUrl,
         path,
         token,
-        () => this.authService.retryWithFreshToken(miner)
+        () => this.authService.retryWithFreshToken(miner),
+        "raw"
       );
     } catch {
       return null;
     }
   }
 
-  async readPayload<T>(miner: MinerEntity, path: string, options?: { authenticated?: boolean }): Promise<T> {
+  async readPayload<T>(
+    miner: MinerEntity,
+    path: string,
+    options?: { authenticated?: boolean; authorizationMode?: "raw" | "bearer" }
+  ): Promise<T> {
     if (options?.authenticated) {
       const token = await this.authService.getValidToken(miner);
       return this.httpClient.get<T>(
         miner.apiBaseUrl,
         path,
         token,
-        () => this.authService.retryWithFreshToken(miner)
+        () => this.authService.retryWithFreshToken(miner),
+        options.authorizationMode ?? "raw"
       );
     }
 
@@ -52,11 +50,11 @@ export class MinerReadService {
   async readMiner(miner: MinerEntity): Promise<MinerReadResult> {
     const [statusResult, perfResult, summaryHttpResult, infoResult, chipsResult, summaryResult, statsResult, devsResult, poolsResult, presetsResult] =
       await Promise.allSettled([
-      this.tryHttpGet<Record<string, unknown>>(miner, "/status"),
-      this.tryHttpGet<MinerPerfSummaryPayload>(miner, "/perf-summary"),
-      this.tryHttpGet<Record<string, unknown>>(miner, "/summary"),
-      this.tryHttpGet<Record<string, unknown>>(miner, "/info"),
-      this.tryHttpGet<unknown>(miner, "/chips"),
+      this.tryAuthedGet<Record<string, unknown>>(miner, "/status"),
+      this.tryAuthedGet<MinerPerfSummaryPayload>(miner, "/perf-summary"),
+      this.tryAuthedGet<Record<string, unknown>>(miner, "/summary"),
+      this.tryAuthedGet<Record<string, unknown>>(miner, "/info"),
+      this.tryAuthedGet<unknown>(miner, "/chips"),
       this.cgminerClient.summary(miner.ip),
       this.cgminerClient.stats(miner.ip),
       this.cgminerClient.devs(miner.ip),

@@ -3,6 +3,7 @@ interface MinerHttpRequestOptions {
   path: string;
   method?: "GET" | "POST" | "PATCH";
   token?: string;
+  authorizationMode?: "raw" | "bearer";
   body?: unknown;
   retryOnUnauthorized?: () => Promise<string | null>;
 }
@@ -33,6 +34,7 @@ export class MinerHttpClient {
   async request<T>(options: MinerHttpRequestOptions): Promise<T> {
     const { baseUrl, path, method = "GET", body } = options;
     let token = options.token;
+    const authorizationMode = options.authorizationMode ?? "raw";
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const headers = new Headers();
@@ -41,7 +43,7 @@ export class MinerHttpClient {
         headers.set("Content-Type", "application/json");
       }
       if (token) {
-        headers.set("Authorization", `Bearer ${token}`);
+        headers.set("Authorization", authorizationMode === "bearer" ? `Bearer ${token}` : token);
       }
 
       const response = await fetch(`${baseUrl}${path}`, {
@@ -75,13 +77,20 @@ export class MinerHttpClient {
     throw new MinerHttpError("Miner HTTP request failed after re-authentication.", 401);
   }
 
-  get<T>(baseUrl: string, path: string, token?: string, retryOnUnauthorized?: () => Promise<string | null>): Promise<T> {
+  get<T>(
+    baseUrl: string,
+    path: string,
+    token?: string,
+    retryOnUnauthorized?: () => Promise<string | null>,
+    authorizationMode?: "raw" | "bearer"
+  ): Promise<T> {
     return this.request<T>({
       baseUrl,
       path,
       method: "GET",
       token,
       retryOnUnauthorized,
+      authorizationMode,
     });
   }
 
@@ -90,7 +99,8 @@ export class MinerHttpClient {
     path: string,
     body?: unknown,
     token?: string,
-    retryOnUnauthorized?: () => Promise<string | null>
+    retryOnUnauthorized?: () => Promise<string | null>,
+    authorizationMode?: "raw" | "bearer"
   ): Promise<T> {
     return this.request<T>({
       baseUrl,
@@ -99,6 +109,7 @@ export class MinerHttpClient {
       body,
       token,
       retryOnUnauthorized,
+      authorizationMode,
     });
   }
 }

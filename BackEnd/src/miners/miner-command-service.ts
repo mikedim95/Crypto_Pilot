@@ -56,7 +56,8 @@ export class MinerCommandService {
     commandType: string,
     path: string,
     body?: unknown,
-    createdBy?: string | null
+    createdBy?: string | null,
+    authorizationMode: "raw" | "bearer" = "raw"
   ): Promise<{ liveData: MinerLiveData; response: unknown }> {
     const miner = await this.repository.getMinerById(minerId);
     if (!miner) {
@@ -70,7 +71,8 @@ export class MinerCommandService {
         path,
         body,
         token,
-        () => this.authService.retryWithFreshToken(miner)
+        () => this.authService.retryWithFreshToken(miner),
+        authorizationMode
       );
 
       await this.repository.logCommand({
@@ -123,7 +125,7 @@ export class MinerCommandService {
   }
 
   reboot(minerId: number, after = 3, createdBy?: string | null) {
-    return this.runCommand(minerId, "reboot", "/system/reboot", { after }, createdBy);
+    return this.runCommand(minerId, "reboot", "/system/reboot", { after }, createdBy, "bearer");
   }
 
   setPreset(minerId: number, preset: string, createdBy?: string | null) {
