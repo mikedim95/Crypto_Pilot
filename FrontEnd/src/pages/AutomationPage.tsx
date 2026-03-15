@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { backendApi } from "@/lib/api";
-import { useBacktests, useStrategies, useStrategyRunDetails, useStrategyRuns } from "@/hooks/useTradingData";
+import {
+  useBacktests,
+  useStrategies,
+  useStrategyRunDetails,
+  useStrategyRuns,
+  useStrategyState,
+} from "@/hooks/useTradingData";
 import type {
   BacktestCreateRequest,
+  BtcHalvingPhase,
+  MarketRegime,
   PortfolioAccountType,
   StrategyConfig,
+  StrategyMarketContextIndicator,
+  StrategyMarketContextPriceFilter,
   StrategyMode,
+  StrategyOperator,
 } from "@/types/api";
 import { SpinnerValue } from "@/components/SpinnerValue";
 import { cn } from "@/lib/utils";
@@ -43,6 +54,13 @@ interface DraftStrategyWeightRow {
   weight: string;
 }
 
+interface DraftMarketContextConditionRow {
+  id: string;
+  indicator: StrategyMarketContextIndicator;
+  operator: StrategyOperator;
+  value: string;
+}
+
 interface StrategyDraft {
   name: string;
   description: string;
@@ -74,6 +92,13 @@ interface StrategyDraft {
     maxTradesPerCycle: string;
     minTradeNotional: string;
     cashReservePct: string;
+  };
+  marketContext: {
+    allowedMarketRegimes: MarketRegime[];
+    allowedHalvingPhases: BtcHalvingPhase[];
+    priceVsLongMaFilter: StrategyMarketContextPriceFilter;
+    blockIfOverheated: boolean;
+    indicatorConditions: DraftMarketContextConditionRow[];
   };
   baseAllocationRows: DraftAllocationRow[];
   rules: DraftRule[];
@@ -114,9 +139,13 @@ interface DraftValidationErrors {
     maxWeightPctPerStrategy?: string;
     strategyWeightRows?: string;
   };
+  marketContext: {
+    indicatorConditions?: string;
+  };
   guards: Partial<Record<GuardField, string>>;
   baseAllocationRows: Record<string, { symbol?: string; percent?: string }>;
   strategyWeightRows: Record<string, DraftWeightRowErrors>;
+  marketContextConditions: Record<string, { value?: string }>;
   rules: Record<string, DraftRuleErrors>;
 }
 
@@ -133,6 +162,26 @@ const INDICATOR_OPTIONS = [
   "drawdown_pct",
 ];
 const OPERATOR_OPTIONS = [">", "<", ">=", "<=", "==", "!="];
+const MARKET_REGIME_OPTIONS: MarketRegime[] = ["risk_on", "neutral", "risk_off", "high_volatility"];
+const HALVING_PHASE_OPTIONS: BtcHalvingPhase[] = [
+  "pre_halving",
+  "early_cycle",
+  "mid_cycle",
+  "late_cycle",
+  "post_cycle",
+];
+const MARKET_CONTEXT_PRICE_FILTER_OPTIONS: StrategyMarketContextPriceFilter[] = [
+  "any",
+  "above_long_ma",
+  "below_long_ma",
+];
+const MARKET_CONTEXT_INDICATOR_OPTIONS: StrategyMarketContextIndicator[] = [
+  "days_since_halving",
+  "btc_price_vs_long_ma_pct",
+  "btc_drawdown_from_ath_pct",
+  "btc_dominance_trend_pct",
+  "btc_overheating_score",
+];
 const ACTION_TYPE_OPTIONS = [
   "increase",
   "decrease",
@@ -160,6 +209,35 @@ const MODE_HELPER_TEXT: Record<StrategyMode, string> = {
   manual: "You choose exactly which base strategies are used.",
   hybrid: "You choose the allowed strategies; the engine adjusts usage dynamically.",
   automatic: "The engine selects strategies dynamically from the full base strategy catalog.",
+};
+
+const MARKET_REGIME_LABELS: Record<MarketRegime, string> = {
+  risk_on: "Risk On",
+  neutral: "Neutral",
+  risk_off: "Risk Off",
+  high_volatility: "High Volatility",
+};
+
+const HALVING_PHASE_LABELS: Record<BtcHalvingPhase, string> = {
+  pre_halving: "Pre-Halving",
+  early_cycle: "Early Cycle",
+  mid_cycle: "Mid Cycle",
+  late_cycle: "Late Cycle",
+  post_cycle: "Post Cycle",
+};
+
+const MARKET_CONTEXT_PRICE_FILTER_LABELS: Record<StrategyMarketContextPriceFilter, string> = {
+  any: "Any",
+  above_long_ma: "Above BTC Long MA",
+  below_long_ma: "Below BTC Long MA",
+};
+
+const MARKET_CONTEXT_INDICATOR_LABELS: Record<StrategyMarketContextIndicator, string> = {
+  days_since_halving: "Days Since Halving",
+  btc_price_vs_long_ma_pct: "BTC vs Long MA %",
+  btc_drawdown_from_ath_pct: "BTC Drawdown From ATH %",
+  btc_dominance_trend_pct: "BTC Dominance Trend %",
+  btc_overheating_score: "BTC Overheating Score",
 };
 
 function normalizeDraftExecutionMode(strategy: StrategyConfig): StrategyMode {
@@ -230,12 +308,26 @@ function toStrategyIdCsv(ids: string[]): string {
     .join(", ");
 }
 
+function toggleSelectionValue<T extends string>(values: T[], value: T): T[] {
+  return values.includes(value)
+    ? values.filter((item) => item !== value)
+    : [...values, value].sort((left, right) => left.localeCompare(right));
+}
+
+function formatMarketIndicatorValue(indicator: StrategyMarketContextIndicator, value: number): string {
+  if (indicator === "days_since_halving") return `${Math.round(value)}d`;
+  if (indicator === "btc_overheating_score") return value.toFixed(4);
+  return `${value.toFixed(2)}%`;
+}
+
 function validateDraft(draft: StrategyDraft): DraftValidationErrors {
   const errors: DraftValidationErrors = {
     composition: {},
+    marketContext: {},
     guards: {},
     baseAllocationRows: {},
     strategyWeightRows: {},
+    marketContextConditions: {},
     rules: {},
   };
 
@@ -480,6 +572,29 @@ function validateDraft(draft: StrategyDraft): DraftValidationErrors {
     errors.guards.cashReservePct = "Min stable % + cash reserve % cannot exceed 100%.";
   }
 
+  draft.marketContext.indicatorConditions.forEach((condition) => {
+    const rowErrors: { value?: string } = {};
+    const rawValue = condition.value.trim();
+    const parsedValue = Number(rawValue);
+
+    if (!rawValue) {
+      rowErrors.value = "Indicator threshold is required.";
+    } else if (!Number.isFinite(parsedValue)) {
+      rowErrors.value = "Indicator threshold must be numeric.";
+    } else if (condition.indicator === "days_since_halving" && !Number.isInteger(parsedValue)) {
+      rowErrors.value = "Days since halving must be an integer.";
+    } else if (
+      condition.indicator === "btc_overheating_score" &&
+      (parsedValue < 0 || parsedValue > 1)
+    ) {
+      rowErrors.value = "Overheating score must be between 0 and 1.";
+    }
+
+    if (rowErrors.value) {
+      errors.marketContextConditions[condition.id] = rowErrors;
+    }
+  });
+
   const seenRuleIds = new Set<string>();
   draft.rules.forEach((rule, index) => {
     const ruleErrors: DraftRuleErrors = {};
@@ -548,6 +663,10 @@ function hasDraftValidationErrors(errors: DraftValidationErrors): boolean {
     return true;
   }
 
+  if (Object.values(errors.marketContext).some(Boolean)) {
+    return true;
+  }
+
   if (Object.values(errors.guards).some(Boolean)) {
     return true;
   }
@@ -557,6 +676,10 @@ function hasDraftValidationErrors(errors: DraftValidationErrors): boolean {
   }
 
   if (Object.values(errors.strategyWeightRows).some((rowErrors) => rowErrors.strategyId || rowErrors.weight)) {
+    return true;
+  }
+
+  if (Object.values(errors.marketContextConditions).some((rowErrors) => rowErrors.value)) {
     return true;
   }
 
@@ -574,6 +697,8 @@ function firstDraftValidationError(errors: DraftValidationErrors): string | unde
   if (errors.disabledAssetsCsv) return errors.disabledAssetsCsv;
   const firstCompositionError = Object.values(errors.composition).find(Boolean);
   if (firstCompositionError) return firstCompositionError;
+  const firstMarketContextError = Object.values(errors.marketContext).find(Boolean);
+  if (firstMarketContextError) return firstMarketContextError;
 
   const firstGuardError = Object.values(errors.guards).find(Boolean);
   if (firstGuardError) return firstGuardError;
@@ -586,6 +711,10 @@ function firstDraftValidationError(errors: DraftValidationErrors): string | unde
   for (const rowError of Object.values(errors.strategyWeightRows)) {
     if (rowError.strategyId) return rowError.strategyId;
     if (rowError.weight) return rowError.weight;
+  }
+
+  for (const rowError of Object.values(errors.marketContextConditions)) {
+    if (rowError.value) return rowError.value;
   }
 
   for (const ruleError of Object.values(errors.rules)) {
@@ -683,6 +812,12 @@ function strategyToDraft(strategy: StrategyConfig): StrategyDraft {
       strategyId,
       weight: String(weight),
     }));
+  const indicatorConditions = (strategy.marketContextConfig?.indicatorConditions ?? []).map((condition) => ({
+    id: newId("market-condition"),
+    indicator: condition.indicator,
+    operator: condition.operator,
+    value: String(condition.value),
+  }));
 
   return {
     name: strategy.name,
@@ -754,6 +889,13 @@ function strategyToDraft(strategy: StrategyConfig): StrategyDraft {
         typeof strategy.guards.cash_reserve_pct === "number"
           ? String(strategy.guards.cash_reserve_pct)
           : "",
+    },
+    marketContext: {
+      allowedMarketRegimes: [...(strategy.marketContextConfig?.allowedMarketRegimes ?? [])],
+      allowedHalvingPhases: [...(strategy.marketContextConfig?.allowedHalvingPhases ?? [])],
+      priceVsLongMaFilter: strategy.marketContextConfig?.priceVsLongMaFilter ?? "any",
+      blockIfOverheated: strategy.marketContextConfig?.blockIfOverheated === true,
+      indicatorConditions,
     },
     baseAllocationRows: allocationRows.length > 0 ? allocationRows : [{ id: newId("allocation"), symbol: "", percent: "" }],
     rules,
@@ -859,6 +1001,50 @@ function draftToPayload(draft: StrategyDraft, strategyId: string): unknown {
     acc[strategyRef] = weight;
     return acc;
   }, {});
+  const marketContextIndicatorConditions = draft.marketContext.indicatorConditions.map((condition, index) => {
+    const value = Number(condition.value);
+    if (!Number.isFinite(value)) {
+      throw new Error(`Market condition ${index + 1}: threshold must be numeric.`);
+    }
+
+    if (condition.indicator === "days_since_halving" && !Number.isInteger(value)) {
+      throw new Error(`Market condition ${index + 1}: days since halving must be an integer.`);
+    }
+
+    if (condition.indicator === "btc_overheating_score" && (value < 0 || value > 1)) {
+      throw new Error(`Market condition ${index + 1}: overheating score must be between 0 and 1.`);
+    }
+
+    return {
+      indicator: condition.indicator,
+      operator: condition.operator,
+      value,
+    };
+  });
+  const marketContextConfig =
+    draft.marketContext.allowedMarketRegimes.length > 0 ||
+    draft.marketContext.allowedHalvingPhases.length > 0 ||
+    draft.marketContext.priceVsLongMaFilter !== "any" ||
+    draft.marketContext.blockIfOverheated ||
+    marketContextIndicatorConditions.length > 0
+      ? {
+          allowedMarketRegimes:
+            draft.marketContext.allowedMarketRegimes.length > 0
+              ? draft.marketContext.allowedMarketRegimes
+              : undefined,
+          allowedHalvingPhases:
+            draft.marketContext.allowedHalvingPhases.length > 0
+              ? draft.marketContext.allowedHalvingPhases
+              : undefined,
+          priceVsLongMaFilter:
+            draft.marketContext.priceVsLongMaFilter !== "any"
+              ? draft.marketContext.priceVsLongMaFilter
+              : undefined,
+          blockIfOverheated: draft.marketContext.blockIfOverheated || undefined,
+          indicatorConditions:
+            marketContextIndicatorConditions.length > 0 ? marketContextIndicatorConditions : undefined,
+        }
+      : undefined;
 
   return {
     id: strategyId,
@@ -891,6 +1077,7 @@ function draftToPayload(draft: StrategyDraft, strategyId: string): unknown {
       minActiveDurationHours: toOptionalInteger(draft.selectionConfig.minActiveDurationHours, "minActiveDurationHours"),
       fallbackStrategy: draft.selectionConfig.fallbackStrategy.trim().toLowerCase() || undefined,
     },
+    marketContextConfig,
     weightAdjustmentConfig: {
       scorePower: toOptionalNumber(draft.weightAdjustment.scorePower, "scorePower"),
       minWeightPctPerStrategy: toOptionalNumber(
@@ -919,13 +1106,11 @@ function createUsableStrategyDraft(baseStrategyIds: string[]): StrategyDraft {
   return {
     name: "",
     description: "",
-    executionMode: "semi_auto",
+    executionMode: "hybrid",
     scheduleInterval: "1h",
     isEnabled: false,
-    compositionMode: "automatic",
     baseStrategiesCsv: baseStrategyIds.join(", "),
     strategyWeightRows: [],
-    autoStrategyUsage: true,
     selectionConfig: {
       minStrategyScore: "",
       maxActiveStrategies: "",
@@ -950,15 +1135,23 @@ function createUsableStrategyDraft(baseStrategyIds: string[]): StrategyDraft {
       minTradeNotional: "",
       cashReservePct: "",
     },
+    marketContext: {
+      allowedMarketRegimes: [],
+      allowedHalvingPhases: [],
+      priceVsLongMaFilter: "any",
+      blockIfOverheated: false,
+      indicatorConditions: [],
+    },
     baseAllocationRows: [{ id: newId("allocation"), symbol: "BTC", percent: "50" }, { id: newId("allocation"), symbol: "USDC", percent: "50" }],
     rules: [],
   };
 }
 
-export function AutomationPage() {
+export function AutomationPage({ accountType }: AutomationPageProps) {
   const queryClient = useQueryClient();
   const [isEditorModalOpen, setIsEditorModalOpen] = useState(false);
   const [isRunDetailsModalOpen, setIsRunDetailsModalOpen] = useState(false);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
 
   const { data: strategyData, isPending: loadingStrategies, error: strategyError } = useStrategies();
   const { data: runData, isPending: loadingRuns } = useStrategyRuns(accountType);
@@ -967,6 +1160,10 @@ export function AutomationPage() {
   const strategies = strategyData?.strategies ?? [];
   const runs = runData?.runs ?? [];
   const backtests = backtestData?.backtests ?? [];
+  const strategyNameById = useMemo(
+    () => new Map(strategies.map((strategy) => [strategy.id, strategy.name])),
+    [strategies]
+  );
 
   const [selectedStrategyId, setSelectedStrategyId] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
@@ -993,6 +1190,10 @@ export function AutomationPage() {
   const readOnlyStrategies = useMemo(
     () => strategies.filter((strategy) => !strategy.baseStrategies || strategy.baseStrategies.length === 0),
     [strategies]
+  );
+  const baseStrategyOptions = useMemo(
+    () => readOnlyStrategies.map((strategy) => ({ id: strategy.id, name: strategy.name })),
+    [readOnlyStrategies]
   );
   const usableStrategies = useMemo(
     () => strategies.filter((strategy) => (strategy.baseStrategies?.length ?? 0) > 0),
@@ -1022,6 +1223,15 @@ export function AutomationPage() {
   const selectedStrategy = useMemo(
     () => usableStrategies.find((strategy) => strategy.id === selectedStrategyId) ?? null,
     [selectedStrategyId, usableStrategies]
+  );
+  const {
+    data: selectedStrategyState,
+    isPending: loadingStrategyState,
+    error: strategyStateError,
+  } = useStrategyState(selectedStrategyId || undefined, accountType);
+  const selectedBaseStrategyIds = useMemo(
+    () => (draft ? parseStrategyIdCsv(draft.baseStrategiesCsv) : []),
+    [draft]
   );
   const selectedBaseStrategiesLabel = useMemo(() => {
     if (selectedBaseStrategyIds.length === 0) return "Select base strategies";
@@ -1078,6 +1288,8 @@ export function AutomationPage() {
   );
   const selectedRun = runDetailsData?.run ?? runs.find((run) => run.id === selectedRunId) ?? null;
   const selectedRunExecutionPlan = runDetailsData?.executionPlan ?? null;
+  const selectedStrategyMarketContext = selectedStrategyState?.marketContext;
+  const selectedStrategyMarketGate = selectedStrategyState?.marketGate;
   const selectedStrategyLastRunAt = useMemo(
     () => runs.find((run) => run.strategyId === selectedStrategyId)?.startedAt ?? selectedStrategy?.lastRunAt,
     [runs, selectedStrategy?.lastRunAt, selectedStrategyId]
@@ -1199,8 +1411,7 @@ export function AutomationPage() {
     saveStrategyMutation.isPending ||
     createStrategyMutation.isPending ||
     deleteStrategyMutation.isPending ||
-    backtestMutation.isPending ||
-    updateDemoBalanceMutation.isPending;
+    backtestMutation.isPending;
 
   const draftValidation = useMemo(() => (draft ? validateDraft(draft) : null), [draft]);
   const draftHasErrors = draftValidation ? hasDraftValidationErrors(draftValidation) : false;
@@ -1287,6 +1498,69 @@ export function AutomationPage() {
           weight: "",
         },
       ],
+    }));
+  };
+
+  const toggleMarketRegimeSelection = (regime: MarketRegime): void => {
+    updateDraft((previous) => ({
+      ...previous,
+      marketContext: {
+        ...previous.marketContext,
+        allowedMarketRegimes: toggleSelectionValue(previous.marketContext.allowedMarketRegimes, regime),
+      },
+    }));
+  };
+
+  const toggleHalvingPhaseSelection = (phase: BtcHalvingPhase): void => {
+    updateDraft((previous) => ({
+      ...previous,
+      marketContext: {
+        ...previous.marketContext,
+        allowedHalvingPhases: toggleSelectionValue(previous.marketContext.allowedHalvingPhases, phase),
+      },
+    }));
+  };
+
+  const updateMarketContextConditionRow = (
+    rowId: string,
+    patch: Partial<DraftMarketContextConditionRow>
+  ): void => {
+    updateDraft((previous) => ({
+      ...previous,
+      marketContext: {
+        ...previous.marketContext,
+        indicatorConditions: previous.marketContext.indicatorConditions.map((row) =>
+          row.id === rowId ? { ...row, ...patch } : row
+        ),
+      },
+    }));
+  };
+
+  const removeMarketContextConditionRow = (rowId: string): void => {
+    updateDraft((previous) => ({
+      ...previous,
+      marketContext: {
+        ...previous.marketContext,
+        indicatorConditions: previous.marketContext.indicatorConditions.filter((row) => row.id !== rowId),
+      },
+    }));
+  };
+
+  const addMarketContextConditionRow = (): void => {
+    updateDraft((previous) => ({
+      ...previous,
+      marketContext: {
+        ...previous.marketContext,
+        indicatorConditions: [
+          ...previous.marketContext.indicatorConditions,
+          {
+            id: newId("market-condition"),
+            indicator: "days_since_halving",
+            operator: ">=",
+            value: "0",
+          },
+        ],
+      },
     }));
   };
 
@@ -1422,6 +1696,7 @@ export function AutomationPage() {
   };
 
   const runIndicators = selectedRun?.inputSnapshot?.marketSignals.indicators ?? {};
+  const runMarketContext = selectedRun?.inputSnapshot?.marketContext;
 
   return (
     <div className="p-6 space-y-6">
@@ -1536,6 +1811,92 @@ export function AutomationPage() {
           <div className="grid grid-cols-2 gap-2 text-xs font-mono">
             <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Rules</div><div className="mt-1 text-foreground">{selectedStrategy?.rules.length ?? 0}</div></div>
             <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Last Run</div><div className="mt-1 text-foreground">{formatDateTime(selectedStrategyLastRunAt)}</div></div>
+          </div>
+
+          <div className="space-y-2 rounded border border-border bg-secondary/20 p-3">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Market Preview</div>
+            {loadingStrategyState ? (
+              <div className="text-xs text-muted-foreground">Loading BTC market context...</div>
+            ) : strategyStateError ? (
+              <div className="rounded border border-negative/30 bg-negative/10 px-2 py-1 text-xs text-negative">
+                {strategyStateError instanceof Error ? strategyStateError.message : "Preview unavailable."}
+              </div>
+            ) : !selectedStrategy ? (
+              <div className="text-xs text-muted-foreground">Select a strategy to preview its BTC regime gate.</div>
+            ) : (
+              <>
+                <div
+                  className={cn(
+                    "rounded border px-3 py-2 text-xs font-mono",
+                    selectedStrategyMarketGate
+                      ? selectedStrategyMarketGate.passed
+                        ? "border-positive/30 bg-positive/10 text-positive"
+                        : "border-negative/30 bg-negative/10 text-negative"
+                      : "border-border bg-secondary/30 text-muted-foreground"
+                  )}
+                >
+                  {selectedStrategyMarketGate
+                    ? selectedStrategyMarketGate.passed
+                      ? "Market gate passes now. Strategy is allowed to execute."
+                      : `Market gate blocks execution now. ${selectedStrategyMarketGate.blockingReasons[0] ?? ""}`.trim()
+                    : "No BTC market gate configured. This strategy is not restricted by cycle context."}
+                </div>
+
+                {selectedStrategyMarketGate && !selectedStrategyMarketGate.passed ? (
+                  <div className="space-y-1">
+                    {selectedStrategyMarketGate.blockingReasons.map((reason, index) => (
+                      <div
+                        key={`${reason}-${index}`}
+                        className="rounded border border-border px-2 py-1 text-[11px] font-mono text-muted-foreground"
+                      >
+                        {reason}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {selectedStrategyMarketContext ? (
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Regime</div>
+                      <div className="mt-1 text-foreground">
+                        {MARKET_REGIME_LABELS[selectedStrategyMarketContext.marketRegime]}
+                      </div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Halving</div>
+                      <div className="mt-1 text-foreground">
+                        {HALVING_PHASE_LABELS[selectedStrategyMarketContext.halvingPhase]}
+                      </div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">BTC vs {selectedStrategyMarketContext.btcLongMaDays}d MA</div>
+                      <div className="mt-1 text-foreground">
+                        {selectedStrategyMarketContext.btcPriceVsLongMaPct >= 0 ? "+" : ""}
+                        {selectedStrategyMarketContext.btcPriceVsLongMaPct.toFixed(2)}%
+                      </div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">ATH Drawdown</div>
+                      <div className="mt-1 text-foreground">
+                        {selectedStrategyMarketContext.btcDrawdownFromAthPct.toFixed(2)}%
+                      </div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Days Since Halving</div>
+                      <div className="mt-1 text-foreground">{selectedStrategyMarketContext.daysSinceHalving}</div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Overheating</div>
+                      <div className="mt-1 text-foreground">
+                        {selectedStrategyMarketContext.overheatingWarning ? "Warning" : "Normal"} (
+                        {selectedStrategyMarketContext.overheatingScore.toFixed(4)})
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -1941,6 +2302,188 @@ export function AutomationPage() {
                       </div>
                     </>
                   ) : null}
+
+                  <div className="space-y-3 rounded border border-border bg-secondary/20 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                          BTC Market Context Gate
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Optional BTC cycle filters that block execution when the current regime does not match.
+                        </div>
+                      </div>
+                      <button
+                        onClick={addMarketContextConditionRow}
+                        className="px-2 py-1 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary"
+                      >
+                        Add Condition
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
+                      <div className="space-y-2">
+                        <label className="text-muted-foreground">Allowed Market Regimes</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {MARKET_REGIME_OPTIONS.map((regime) => (
+                            <label
+                              key={regime}
+                              className="flex items-center gap-2 rounded border border-border bg-secondary/30 px-2 py-2"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={draft.marketContext.allowedMarketRegimes.includes(regime)}
+                                onChange={() => toggleMarketRegimeSelection(regime)}
+                                className="h-4 w-4"
+                              />
+                              <span>{MARKET_REGIME_LABELS[regime]}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-muted-foreground">Allowed Halving Phases</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {HALVING_PHASE_OPTIONS.map((phase) => (
+                            <label
+                              key={phase}
+                              className="flex items-center gap-2 rounded border border-border bg-secondary/30 px-2 py-2"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={draft.marketContext.allowedHalvingPhases.includes(phase)}
+                                onChange={() => toggleHalvingPhaseSelection(phase)}
+                                className="h-4 w-4"
+                              />
+                              <span>{HALVING_PHASE_LABELS[phase]}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
+                      <div>
+                        <label className="text-muted-foreground">BTC Price vs Long MA</label>
+                        <select
+                          value={draft.marketContext.priceVsLongMaFilter}
+                          onChange={(event) =>
+                            updateDraft((previous) => ({
+                              ...previous,
+                              marketContext: {
+                                ...previous.marketContext,
+                                priceVsLongMaFilter: event.target.value as StrategyMarketContextPriceFilter,
+                              },
+                            }))
+                          }
+                          className={editorFieldClass(false)}
+                        >
+                          {MARKET_CONTEXT_PRICE_FILTER_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {MARKET_CONTEXT_PRICE_FILTER_LABELS[option]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="flex items-end">
+                        <label className="inline-flex items-center gap-2 text-foreground">
+                          <input
+                            type="checkbox"
+                            checked={draft.marketContext.blockIfOverheated}
+                            onChange={(event) =>
+                              updateDraft((previous) => ({
+                                ...previous,
+                                marketContext: {
+                                  ...previous.marketContext,
+                                  blockIfOverheated: event.target.checked,
+                                },
+                              }))
+                            }
+                            className="h-4 w-4"
+                          />
+                          Block when BTC overheating warning is active
+                        </label>
+                      </div>
+                    </div>
+
+                    {draft.marketContext.indicatorConditions.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">
+                        No numeric BTC market conditions configured.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {draft.marketContext.indicatorConditions.map((condition) => {
+                          const conditionErrors = draftValidation?.marketContextConditions[condition.id];
+                          return (
+                            <div
+                              key={condition.id}
+                              className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end rounded border border-border bg-secondary/30 p-2 text-xs font-mono"
+                            >
+                              <div className="md:col-span-5">
+                                <label className="text-muted-foreground">Indicator</label>
+                                <select
+                                  value={condition.indicator}
+                                  onChange={(event) =>
+                                    updateMarketContextConditionRow(condition.id, {
+                                      indicator: event.target.value as StrategyMarketContextIndicator,
+                                    })
+                                  }
+                                  className={editorFieldClass(false, true)}
+                                >
+                                  {MARKET_CONTEXT_INDICATOR_OPTIONS.map((option) => (
+                                    <option key={option} value={option}>
+                                      {MARKET_CONTEXT_INDICATOR_LABELS[option]}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="md:col-span-2">
+                                <label className="text-muted-foreground">Operator</label>
+                                <select
+                                  value={condition.operator}
+                                  onChange={(event) =>
+                                    updateMarketContextConditionRow(condition.id, {
+                                      operator: event.target.value as StrategyOperator,
+                                    })
+                                  }
+                                  className={editorFieldClass(false, true)}
+                                >
+                                  {OPERATOR_OPTIONS.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="md:col-span-3">
+                                <label className="text-muted-foreground">Threshold</label>
+                                <input
+                                  value={condition.value}
+                                  onChange={(event) =>
+                                    updateMarketContextConditionRow(condition.id, { value: event.target.value })
+                                  }
+                                  className={editorFieldClass(Boolean(conditionErrors?.value), true)}
+                                />
+                                {conditionErrors?.value ? (
+                                  <div className={inlineErrorClass}>{conditionErrors.value}</div>
+                                ) : null}
+                              </div>
+                              <div className="md:col-span-2">
+                                <button
+                                  onClick={() => removeMarketContextConditionRow(condition.id)}
+                                  className="w-full px-2 py-1.5 rounded border border-border text-xs font-mono text-foreground hover:bg-secondary"
+                                >
+                                  Del
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2184,10 +2727,68 @@ export function AutomationPage() {
 
                 {selectedRun.error ? <div className="rounded-md border border-negative/30 bg-negative/10 px-3 py-2 text-xs text-negative font-mono">{selectedRun.error}</div> : null}
 
+                {selectedRun.skipReason ? (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 font-mono">
+                    Skip Reason: {selectedRun.skipReason}
+                  </div>
+                ) : null}
+
                 {selectedRun.warnings.length > 0 ? (
                   <div className="space-y-1">
                     <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Warnings</div>
                     {selectedRun.warnings.map((warning, index) => <div key={`${warning}-${index}`} className="rounded border border-border px-2 py-1 text-xs text-muted-foreground font-mono">{warning}</div>)}
+                  </div>
+                ) : null}
+
+                {selectedRun.marketGate ? (
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Market Gate</div>
+                    <div
+                      className={cn(
+                        "rounded border px-3 py-2 text-xs font-mono",
+                        selectedRun.marketGate.passed
+                          ? "border-positive/30 bg-positive/10 text-positive"
+                          : "border-negative/30 bg-negative/10 text-negative"
+                      )}
+                    >
+                      {selectedRun.marketGate.passed
+                        ? "Gate passed for this run."
+                        : "Gate blocked this run."}
+                    </div>
+                    {selectedRun.marketGate.blockingReasons.map((reason, index) => (
+                      <div
+                        key={`${reason}-${index}`}
+                        className="rounded border border-border px-2 py-1 text-xs font-mono text-muted-foreground"
+                      >
+                        {reason}
+                      </div>
+                    ))}
+                    {selectedRun.marketGate.filterResults.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs font-mono">
+                        {selectedRun.marketGate.filterResults.map((result, index) => (
+                          <div key={`${result.label}-${index}`} className="rounded border border-border bg-secondary/30 p-2">
+                            <div className="text-muted-foreground">{result.label}</div>
+                            <div className="mt-1 text-foreground">
+                              {result.actualValue} / {result.expectedValue}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {selectedRun.marketGate.conditionResults.length > 0 ? (
+                      <div className="space-y-1">
+                        {selectedRun.marketGate.conditionResults.map((result, index) => (
+                          <div
+                            key={`${result.indicator}-${index}`}
+                            className="rounded border border-border px-2 py-1 text-xs font-mono text-muted-foreground"
+                          >
+                            {MARKET_CONTEXT_INDICATOR_LABELS[result.indicator]} {result.operator}{" "}
+                            {formatMarketIndicatorValue(result.indicator, result.expectedValue)} | actual{" "}
+                            {formatMarketIndicatorValue(result.indicator, result.actualValue)}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -2197,6 +2798,40 @@ export function AutomationPage() {
                     <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Assets</div><div className="mt-1 text-foreground">{selectedRun.inputSnapshot.portfolio.assets.length}</div></div>
                     <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">Volatility</div><div className="mt-1 text-foreground">{(runIndicators.volatility ?? 0).toFixed(4)}</div></div>
                     <div className="rounded border border-border bg-secondary/30 p-2"><div className="text-muted-foreground">BTC Dom</div><div className="mt-1 text-foreground">{(runIndicators.btc_dominance ?? 0).toFixed(4)}</div></div>
+                  </div>
+                ) : null}
+
+                {runMarketContext ? (
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs font-mono">
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Regime</div>
+                      <div className="mt-1 text-foreground">{MARKET_REGIME_LABELS[runMarketContext.marketRegime]}</div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Halving</div>
+                      <div className="mt-1 text-foreground">{HALVING_PHASE_LABELS[runMarketContext.halvingPhase]}</div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Days Since Halving</div>
+                      <div className="mt-1 text-foreground">{runMarketContext.daysSinceHalving}</div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">BTC vs {runMarketContext.btcLongMaDays}d MA</div>
+                      <div className="mt-1 text-foreground">
+                        {runMarketContext.btcPriceVsLongMaPct >= 0 ? "+" : ""}
+                        {runMarketContext.btcPriceVsLongMaPct.toFixed(2)}%
+                      </div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">ATH Drawdown</div>
+                      <div className="mt-1 text-foreground">{runMarketContext.btcDrawdownFromAthPct.toFixed(2)}%</div>
+                    </div>
+                    <div className="rounded border border-border bg-secondary/30 p-2">
+                      <div className="text-muted-foreground">Overheating</div>
+                      <div className="mt-1 text-foreground">
+                        {runMarketContext.overheatingWarning ? "Warning" : "Normal"} ({runMarketContext.overheatingScore.toFixed(4)})
+                      </div>
+                    </div>
                   </div>
                 ) : null}
 
@@ -2279,7 +2914,21 @@ export function AutomationPage() {
                     <td className="py-3 px-4 text-left text-xs font-mono text-muted-foreground">{formatDateTime(run.startedAt)}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{run.strategyId}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{run.accountType}</td>
-                    <td className="py-3 px-4 text-right text-xs font-mono"><span className={run.status === "completed" ? "text-positive" : run.status === "failed" ? "text-negative" : "text-muted-foreground"}>{run.status}</span></td>
+                    <td className="py-3 px-4 text-right text-xs font-mono">
+                      <span
+                        className={
+                          run.status === "completed"
+                            ? "text-positive"
+                            : run.status === "failed"
+                              ? "text-negative"
+                              : run.status === "skipped"
+                                ? "text-amber-200"
+                                : "text-muted-foreground"
+                        }
+                      >
+                        {run.status}
+                      </span>
+                    </td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{run.trigger}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-muted-foreground">{formatDateTime(run.completedAt)}</td>
                     <td className="py-3 px-4 text-right text-xs font-mono text-foreground">{formatDuration(run.startedAt, run.completedAt)}</td>

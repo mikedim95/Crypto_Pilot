@@ -3,6 +3,8 @@ import { StrategyEngine } from "./strategy-engine.js";
 import { StrategyRepository } from "./strategy-repository.js";
 import { MockHistoricalMarketDataSource } from "./historical-market-data.js";
 import { computeBacktestMetrics } from "./performance-metrics.js";
+import { detectMarketRegime } from "./strategy-regime.js";
+import { buildHistoricalStrategyMarketContext, BTC_CONTEXT_SYMBOLS } from "./strategy-market-context.js";
 import { StrategyUserScope } from "./strategy-user-scope.js";
 import {
   AllocationMap,
@@ -156,9 +158,10 @@ export class BacktestEngine {
     }, userScope);
 
     try {
-      const symbols = sortSymbols([...Object.keys(strategy.baseAllocation), request.baseCurrency]);
+      const portfolioSymbols = sortSymbols([...Object.keys(strategy.baseAllocation), request.baseCurrency]);
+      const seriesSymbols = sortSymbols([...portfolioSymbols, ...BTC_CONTEXT_SYMBOLS]);
       const series = await this.historicalMarketData.getSeries({
-        symbols,
+        symbols: seriesSymbols,
         startDate: request.startDate,
         endDate: request.endDate,
         timeframe: request.timeframe,
@@ -170,8 +173,8 @@ export class BacktestEngine {
       }
 
       const firstPoint = series[0];
-      const initialTarget = normalizeAllocation(strategy.baseAllocation, symbols);
-      let holdings: Holdings = symbols.reduce<Holdings>((acc, symbol) => {
+      const initialTarget = normalizeAllocation(strategy.baseAllocation, portfolioSymbols);
+      let holdings: Holdings = portfolioSymbols.reduce<Holdings>((acc, symbol) => {
         const price = firstPoint.prices[symbol] ?? 0;
         const targetValue = (initialTarget[symbol] ?? 0) / 100 * request.initialCapital;
         acc[symbol] = price > 0 ? targetValue / price : 0;
@@ -181,7 +184,8 @@ export class BacktestEngine {
       let peakValue = request.initialCapital;
       const steps: BacktestStep[] = [];
 
-      for (const point of series) {
+      for (let pointIndex = 0; pointIndex < series.length; pointIndex += 1) {
+        const point = series[pointIndex];
         const portfolioBefore = buildPortfolioState(
           point.timestamp,
           holdings,
@@ -189,11 +193,17 @@ export class BacktestEngine {
           point.signals,
           request.baseCurrency
         );
+        const marketContext = buildHistoricalStrategyMarketContext({
+          points: series,
+          pointIndex,
+          marketRegime: detectMarketRegime(point.signals),
+        });
 
         const evaluation = this.strategyEngine.evaluate({
           strategy,
           portfolio: portfolioBefore,
           marketSignals: point.signals,
+          marketContext,
           strategyUniverse,
         });
 

@@ -1,6 +1,8 @@
 import { StrategyEngine } from "./strategy-engine.js";
 import { StrategyRepository } from "./strategy-repository.js";
 import { buildMarketSignalsFromPortfolio } from "./market-signal-service.js";
+import { buildLiveStrategyMarketContext } from "./strategy-market-context.js";
+import { detectMarketRegime } from "./strategy-regime.js";
 import { createDemoAccountHoldings, getPortfolioState } from "./portfolio-state-service.js";
 import { strategyUserScopeKey, StrategyUserScope } from "./strategy-user-scope.js";
 import {
@@ -10,6 +12,7 @@ import {
   PortfolioState,
   StrategyConfig,
   StrategyEvaluationResult,
+  StrategyMarketContextSnapshot,
   StrategyRun,
 } from "./types.js";
 
@@ -49,6 +52,10 @@ export class StrategyRunner {
     }, {});
   }
 
+  private async buildMarketContext(marketSignals: MarketSignalSnapshot, timestamp: string): Promise<StrategyMarketContextSnapshot> {
+    return buildLiveStrategyMarketContext(timestamp, detectMarketRegime(marketSignals));
+  }
+
   async evaluateStrategyState(
     strategyId: string,
     accountType?: PortfolioAccountType,
@@ -58,6 +65,7 @@ export class StrategyRunner {
     evaluation: StrategyEvaluationResult;
     portfolio: PortfolioState;
     marketSignals: MarketSignalSnapshot;
+    marketContext: StrategyMarketContextSnapshot;
     accountType: PortfolioAccountType;
   } | null>;
   async evaluateStrategyState(
@@ -69,6 +77,7 @@ export class StrategyRunner {
     evaluation: StrategyEvaluationResult;
     portfolio: PortfolioState;
     marketSignals: MarketSignalSnapshot;
+    marketContext: StrategyMarketContextSnapshot;
     accountType: PortfolioAccountType;
   } | null> {
     const strategy = await this.repository.getStrategy(strategyId, userScope);
@@ -77,12 +86,14 @@ export class StrategyRunner {
     const demoSettings = await this.resolveDemoSettings(accountType, userScope);
     const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings, userScope });
     const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
+    const marketContext = await this.buildMarketContext(marketSignals, portfolio.timestamp);
     const strategyUniverse = await this.buildStrategyUniverse(userScope);
 
     const evaluation = this.engine.evaluate({
       strategy,
       portfolio,
       marketSignals,
+      marketContext,
       accountType,
       strategyUniverse,
     });
@@ -92,6 +103,7 @@ export class StrategyRunner {
       evaluation,
       portfolio,
       marketSignals,
+      marketContext,
       accountType,
     };
   }
@@ -116,6 +128,8 @@ export class StrategyRunner {
         accountType,
         mode: strategy.executionMode,
         trigger,
+        warnings: ["Strategy run skipped because another run is already active."],
+        skipReason: "Strategy run already in progress.",
       }, userScope);
     }
 
@@ -126,6 +140,14 @@ export class StrategyRunner {
         accountType,
         mode: strategy.executionMode,
         trigger,
+        warnings: [
+          !strategy.isEnabled
+            ? "Strategy run skipped because the strategy is disabled."
+            : "Strategy run skipped because manual strategies do not run on the scheduler.",
+        ],
+        skipReason: !strategy.isEnabled
+          ? "Strategy is disabled."
+          : "Manual strategies do not run on the scheduler.",
       }, userScope);
     }
 
@@ -143,12 +165,14 @@ export class StrategyRunner {
       const demoSettings = await this.resolveDemoSettings(accountType, userScope);
       const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount: demoSettings, userScope });
       const marketSignals = buildMarketSignalsFromPortfolio(portfolio);
+      const marketContext = await this.buildMarketContext(marketSignals, portfolio.timestamp);
       const strategyUniverse = await this.buildStrategyUniverse(userScope);
 
       run = (await this.repository.updateStrategyRun(run.id, {
         inputSnapshot: {
           portfolio,
           marketSignals,
+          marketContext,
         },
       }, userScope)) ?? run;
 
@@ -156,11 +180,27 @@ export class StrategyRunner {
         strategy,
         portfolio,
         marketSignals,
+        marketContext,
         accountType,
         strategyUniverse,
       });
 
       await this.repository.saveExecutionPlan(evaluation.executionPlan, userScope);
+
+      if (evaluation.marketGate && !evaluation.marketGate.passed) {
+        const skipped = await this.repository.updateStrategyRun(run.id, {
+          status: "skipped",
+          completedAt: new Date().toISOString(),
+          accountType,
+          adjustedAllocation: evaluation.adjustedTargetAllocation,
+          executionPlanId: evaluation.executionPlan.id,
+          warnings: evaluation.warnings,
+          marketGate: evaluation.marketGate,
+          skipReason: evaluation.marketGate.blockingReasons[0] ?? "Strategy execution blocked by market context gate.",
+        }, userScope);
+
+        return skipped ?? run;
+      }
 
       const completedAt = new Date().toISOString();
       const completed = await this.repository.updateStrategyRun(run.id, {

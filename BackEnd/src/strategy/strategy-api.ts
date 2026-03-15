@@ -195,6 +195,8 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
         adjustedTargetAllocation: state.evaluation.adjustedTargetAllocation,
         portfolio: state.portfolio,
         signals: state.marketSignals,
+        marketContext: state.evaluation.marketContext,
+        marketGate: state.evaluation.marketGate,
         executionPlan: state.evaluation.executionPlan,
         traces: state.evaluation.traces,
         warnings: state.evaluation.warnings,

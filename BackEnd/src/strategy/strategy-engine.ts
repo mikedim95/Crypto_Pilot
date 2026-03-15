@@ -5,6 +5,7 @@ import { evaluateRules } from "./rule-evaluator.js";
 import { scoreStrategyForCycle } from "./strategy-scoring.js";
 import { detectMarketRegime } from "./strategy-regime.js";
 import { getBasicStrategyIds } from "./strategy-catalog.js";
+import { evaluateStrategyMarketGate } from "./strategy-market-context.js";
 import { mergeAssetUniverse, normalizeAllocation, withAllAssets } from "./allocation-utils.js";
 import {
   AllocationMap,
@@ -15,6 +16,7 @@ import {
   RuleEvaluationTrace,
   StrategyConfig,
   StrategyEvaluationResult,
+  StrategyMarketContextSnapshot,
   StrategyScoreResult,
 } from "./types.js";
 
@@ -22,6 +24,7 @@ interface StrategyEngineInput {
   strategy: StrategyConfig;
   portfolio: PortfolioState;
   marketSignals: MarketSignalSnapshot;
+  marketContext?: StrategyMarketContextSnapshot;
   accountType?: PortfolioAccountType;
   modeOverride?: StrategyConfig["executionMode"];
   strategyUniverse?: Record<string, StrategyConfig>;
@@ -403,6 +406,8 @@ export class StrategyEngine {
     let strategyMode = normalizeExecutionMode(input.strategy.executionMode);
     const symbols = mergeAssetUniverse(input.strategy.baseAllocation, input.portfolio.allocation);
     const currentAllocation = normalizeAllocation(withAllAssets(input.portfolio.allocation, symbols), symbols);
+    const marketContext = input.marketContext;
+    const marketGate = evaluateStrategyMarketGate(input.strategy, marketContext);
 
     let baseAllocation = normalizeAllocation(withAllAssets(input.strategy.baseAllocation, symbols), symbols);
     let compositionWarnings: string[] = [];
@@ -513,10 +518,12 @@ export class StrategyEngine {
       baseAllocation,
     });
 
-    const adjustedTargetAllocation = normalizeAllocation(
+    const ruleDrivenTargetAllocation = normalizeAllocation(
       evaluated.adjustedTargetAllocation,
       mergeAssetUniverse(evaluated.adjustedTargetAllocation, currentAllocation)
     );
+    const adjustedTargetAllocation =
+      marketGate && !marketGate.passed ? currentAllocation : ruleDrivenTargetAllocation;
 
     const rebalancePlan = buildRebalancePlan({
       currentAllocation,
@@ -525,11 +532,21 @@ export class StrategyEngine {
       guards: input.strategy.guards,
     });
 
-    const warnings = [...compositionWarnings, ...evaluated.warnings, ...rebalancePlan.warnings];
-    const actionReasonsByAsset = {
-      ...compositionReasonByAsset,
-      ...evaluated.actionReasonsByAsset,
-    };
+    const gateWarnings =
+      marketGate && !marketGate.passed
+        ? [
+            "Market context gate blocked execution.",
+            ...marketGate.blockingReasons.map((reason) => `Market gate: ${reason}`),
+          ]
+        : [];
+    const warnings = [...compositionWarnings, ...evaluated.warnings, ...gateWarnings, ...rebalancePlan.warnings];
+    const actionReasonsByAsset =
+      marketGate && !marketGate.passed
+        ? {}
+        : {
+            ...compositionReasonByAsset,
+            ...evaluated.actionReasonsByAsset,
+          };
 
     const executionPlan = generateExecutionPlan({
       strategyId: input.strategy.id,
@@ -552,6 +569,8 @@ export class StrategyEngine {
       warnings,
       rebalancePlan,
       executionPlan,
+      marketContext,
+      marketGate,
       composition: compositionDetails,
     };
   }

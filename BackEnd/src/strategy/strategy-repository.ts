@@ -1074,6 +1074,10 @@ export class StrategyRepository {
     mode: StrategyRun["mode"];
     trigger: StrategyRun["trigger"];
     inputSnapshot?: StrategyRun["inputSnapshot"];
+    warnings?: string[];
+    marketGate?: StrategyRun["marketGate"];
+    skipReason?: string;
+    error?: string;
   }, scope?: StrategyUserScope): Promise<StrategyRun> {
     return this.mutate(scope, (store) => {
       const run: StrategyRun = {
@@ -1085,7 +1089,10 @@ export class StrategyRepository {
         mode: input.mode,
         trigger: input.trigger,
         inputSnapshot: input.inputSnapshot,
-        warnings: [],
+        warnings: input.warnings ?? [],
+        marketGate: input.marketGate,
+        skipReason: input.skipReason,
+        error: input.error,
       };
 
       store.strategyRuns.push(run);

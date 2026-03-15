@@ -38,6 +38,27 @@ export type StrategyCompositionMode = (typeof STRATEGY_COMPOSITION_MODES)[number
 export const MARKET_REGIMES = ["risk_on", "neutral", "risk_off", "high_volatility"] as const;
 export type MarketRegime = (typeof MARKET_REGIMES)[number];
 
+export const BTC_HALVING_PHASES = [
+  "pre_halving",
+  "early_cycle",
+  "mid_cycle",
+  "late_cycle",
+  "post_cycle",
+] as const;
+export type BtcHalvingPhase = (typeof BTC_HALVING_PHASES)[number];
+
+export const STRATEGY_MARKET_CONTEXT_PRICE_FILTERS = ["any", "above_long_ma", "below_long_ma"] as const;
+export type StrategyMarketContextPriceFilter = (typeof STRATEGY_MARKET_CONTEXT_PRICE_FILTERS)[number];
+
+export const STRATEGY_MARKET_CONTEXT_INDICATORS = [
+  "days_since_halving",
+  "btc_price_vs_long_ma_pct",
+  "btc_drawdown_from_ath_pct",
+  "btc_dominance_trend_pct",
+  "btc_overheating_score",
+] as const;
+export type StrategyMarketContextIndicator = (typeof STRATEGY_MARKET_CONTEXT_INDICATORS)[number];
+
 export const PORTFOLIO_ACCOUNT_TYPES = ["real", "demo"] as const;
 export type PortfolioAccountType = (typeof PORTFOLIO_ACCOUNT_TYPES)[number];
 
@@ -103,6 +124,20 @@ export interface StrategyWeightAdjustmentConfig {
   maxWeightPctPerStrategy?: number;
 }
 
+export interface StrategyMarketContextCondition {
+  indicator: StrategyMarketContextIndicator;
+  operator: StrategyOperator;
+  value: number;
+}
+
+export interface StrategyMarketContextConfig {
+  allowedMarketRegimes?: MarketRegime[];
+  allowedHalvingPhases?: BtcHalvingPhase[];
+  priceVsLongMaFilter?: StrategyMarketContextPriceFilter;
+  blockIfOverheated?: boolean;
+  indicatorConditions?: StrategyMarketContextCondition[];
+}
+
 export interface StrategyScoreComponents {
   recent_return: number;
   drawdown_penalty: number;
@@ -130,6 +165,46 @@ export interface DemoAccountSettings {
   holdings: DemoAccountHolding[];
 }
 
+export interface StrategyMarketContextSnapshot {
+  timestamp: string;
+  marketRegime: MarketRegime;
+  btcPrice: number;
+  btcLongMaDays: number;
+  btcLongMa: number;
+  btcPriceVsLongMaPct: number;
+  btcAth: number;
+  btcDrawdownFromAthPct: number;
+  daysSinceHalving: number;
+  halvingPhase: BtcHalvingPhase;
+  overheatingWarning: boolean;
+  overheatingScore: number;
+  btcDominance?: number;
+  btcDominanceTrendPct?: number;
+}
+
+export interface StrategyMarketGateFilterResult {
+  label: string;
+  passed: boolean;
+  actualValue: string;
+  expectedValue: string;
+}
+
+export interface StrategyMarketGateConditionResult {
+  indicator: StrategyMarketContextIndicator;
+  operator: StrategyOperator;
+  expectedValue: number;
+  actualValue: number;
+  passed: boolean;
+}
+
+export interface StrategyMarketGateResult {
+  configured: boolean;
+  passed: boolean;
+  blockingReasons: string[];
+  filterResults: StrategyMarketGateFilterResult[];
+  conditionResults: StrategyMarketGateConditionResult[];
+}
+
 export interface StrategyConfig {
   id: string;
   name: string;
@@ -150,6 +225,7 @@ export interface StrategyConfig {
   autoStrategyUsage?: boolean;
   strategySelectionConfig?: StrategySelectionConfig;
   weightAdjustmentConfig?: StrategyWeightAdjustmentConfig;
+  marketContextConfig?: StrategyMarketContextConfig;
   createdAt: string;
   updatedAt: string;
 }
@@ -254,6 +330,8 @@ export interface StrategyEvaluationResult {
   warnings: string[];
   rebalancePlan: RebalancePlan;
   executionPlan: ExecutionPlan;
+  marketContext?: StrategyMarketContextSnapshot;
+  marketGate?: StrategyMarketGateResult;
   composition?: {
     compositionMode: StrategyCompositionMode;
     autoStrategyUsage: boolean;
@@ -275,10 +353,13 @@ export interface StrategyRun {
   inputSnapshot?: {
     portfolio: PortfolioState;
     marketSignals: MarketSignalSnapshot;
+    marketContext?: StrategyMarketContextSnapshot;
   };
   adjustedAllocation?: AllocationMap;
   executionPlanId?: string;
   warnings: string[];
+  marketGate?: StrategyMarketGateResult;
+  skipReason?: string;
   error?: string;
 }
 

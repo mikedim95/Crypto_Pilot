@@ -1,14 +1,19 @@
 import { z } from "zod";
 import {
+  BTC_HALVING_PHASES,
   LegacyStrategyMode,
+  MARKET_REGIMES,
   StrategyActionType,
   StrategyConfig,
   StrategyCondition,
   StrategyCompositionMode,
   StrategyGuardConfig,
+  StrategyMarketContextConfig,
   StrategyMode,
   StrategyRule,
   LEGACY_STRATEGY_MODES,
+  STRATEGY_MARKET_CONTEXT_INDICATORS,
+  STRATEGY_MARKET_CONTEXT_PRICE_FILTERS,
   STRATEGY_ACTION_TYPES,
   STRATEGY_COMPOSITION_MODES,
   STRATEGY_INDICATORS,
@@ -102,6 +107,22 @@ const weightAdjustmentConfigSchema = z
   })
   .default({});
 
+const marketContextConditionSchema = z.object({
+  indicator: z.enum(STRATEGY_MARKET_CONTEXT_INDICATORS),
+  operator: z.enum(STRATEGY_OPERATORS),
+  value: z.number().finite(),
+});
+
+const marketContextConfigSchema = z
+  .object({
+    allowedMarketRegimes: z.array(z.enum(MARKET_REGIMES)).optional(),
+    allowedHalvingPhases: z.array(z.enum(BTC_HALVING_PHASES)).optional(),
+    priceVsLongMaFilter: z.enum(STRATEGY_MARKET_CONTEXT_PRICE_FILTERS).optional(),
+    blockIfOverheated: z.boolean().optional(),
+    indicatorConditions: z.array(marketContextConditionSchema).optional(),
+  })
+  .optional();
+
 const strategyModeSchema = z.enum([...STRATEGY_MODES, ...LEGACY_STRATEGY_MODES] as const);
 
 export const strategyDslSchema = z.object({
@@ -125,6 +146,7 @@ export const strategyDslSchema = z.object({
   autoStrategyUsage: z.boolean().default(false),
   strategySelectionConfig: strategySelectionConfigSchema,
   weightAdjustmentConfig: weightAdjustmentConfigSchema,
+  marketContextConfig: marketContextConfigSchema,
 });
 
 export type StrategyDslInput = z.infer<typeof strategyDslSchema>;
@@ -218,6 +240,41 @@ function normalizeBaseAllocation(baseAllocation: Record<string, number>): Record
   return normalizeAllocation(normalized);
 }
 
+function normalizeMarketContextConfig(
+  config: StrategyDslInput["marketContextConfig"]
+): StrategyMarketContextConfig | undefined {
+  if (!config) return undefined;
+
+  const allowedMarketRegimes = Array.from(new Set((config.allowedMarketRegimes ?? []).filter(Boolean)));
+  const allowedHalvingPhases = Array.from(new Set((config.allowedHalvingPhases ?? []).filter(Boolean)));
+  const indicatorConditions = (config.indicatorConditions ?? []).map((condition) => ({
+    indicator: condition.indicator,
+    operator: condition.operator,
+    value: condition.value,
+  }));
+  const priceVsLongMaFilter =
+    config.priceVsLongMaFilter && config.priceVsLongMaFilter !== "any" ? config.priceVsLongMaFilter : undefined;
+  const blockIfOverheated = config.blockIfOverheated === true ? true : undefined;
+
+  if (
+    allowedMarketRegimes.length === 0 &&
+    allowedHalvingPhases.length === 0 &&
+    !priceVsLongMaFilter &&
+    !blockIfOverheated &&
+    indicatorConditions.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    allowedMarketRegimes: allowedMarketRegimes.length > 0 ? allowedMarketRegimes : undefined,
+    allowedHalvingPhases: allowedHalvingPhases.length > 0 ? allowedHalvingPhases : undefined,
+    priceVsLongMaFilter,
+    blockIfOverheated,
+    indicatorConditions: indicatorConditions.length > 0 ? indicatorConditions : undefined,
+  };
+}
+
 function collectSchemaErrors(error: z.ZodError): string[] {
   return error.issues.map((issue) => {
     const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
@@ -281,6 +338,7 @@ export function validateStrategyDsl(input: unknown, nowIso = new Date().toISOStr
   const basicCatalogIds = getBasicStrategyIds();
   const basicCatalogCount = basicCatalogIds.length;
   const basicCatalogSet = new Set(basicCatalogIds);
+  const isBasicCatalogStrategy = basicCatalogSet.has(strategyId.trim().toLowerCase());
 
   let executionMode = normalizeExecutionMode(parsed.data.executionMode);
   if (executionMode === "automatic" && selectedOrAllowedBaseStrategies.length > 0) {
@@ -295,7 +353,7 @@ export function validateStrategyDsl(input: unknown, nowIso = new Date().toISOStr
     errors.push("Base allocation must total exactly 100%.");
   }
 
-  const requiresAllowedPool = executionMode === "manual" || executionMode === "hybrid";
+  const requiresAllowedPool = (executionMode === "manual" || executionMode === "hybrid") && !isBasicCatalogStrategy;
   const usesAutomationControls = executionMode !== "manual";
   if (requiresAllowedPool && selectedOrAllowedBaseStrategies.length === 0) {
     errors.push(
@@ -387,6 +445,7 @@ export function validateStrategyDsl(input: unknown, nowIso = new Date().toISOStr
       minWeightPctPerStrategy: parsed.data.weightAdjustmentConfig.minWeightPctPerStrategy,
       maxWeightPctPerStrategy: parsed.data.weightAdjustmentConfig.maxWeightPctPerStrategy,
     },
+    marketContextConfig: normalizeMarketContextConfig(parsed.data.marketContextConfig),
     createdAt: nowIso,
     updatedAt: nowIso,
   };

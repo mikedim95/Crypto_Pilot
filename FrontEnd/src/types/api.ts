@@ -330,6 +330,14 @@ export interface NicehashAssetBalance {
 export type StrategyMode = "manual" | "hybrid" | "automatic";
 export type StrategyCompositionMode = "manual" | "automatic";
 export type MarketRegime = "risk_on" | "neutral" | "risk_off" | "high_volatility";
+export type BtcHalvingPhase = "pre_halving" | "early_cycle" | "mid_cycle" | "late_cycle" | "post_cycle";
+export type StrategyMarketContextPriceFilter = "any" | "above_long_ma" | "below_long_ma";
+export type StrategyMarketContextIndicator =
+  | "days_since_halving"
+  | "btc_price_vs_long_ma_pct"
+  | "btc_drawdown_from_ath_pct"
+  | "btc_dominance_trend_pct"
+  | "btc_overheating_score";
 export type StrategyOperator = ">" | "<" | ">=" | "<=" | "==" | "!=";
 export type StrategyActionType =
   | "increase"
@@ -410,6 +418,60 @@ export interface StrategyWeightAdjustmentConfig {
   maxWeightPctPerStrategy?: number;
 }
 
+export interface StrategyMarketContextCondition {
+  indicator: StrategyMarketContextIndicator;
+  operator: StrategyOperator;
+  value: number;
+}
+
+export interface StrategyMarketContextConfig {
+  allowedMarketRegimes?: MarketRegime[];
+  allowedHalvingPhases?: BtcHalvingPhase[];
+  priceVsLongMaFilter?: StrategyMarketContextPriceFilter;
+  blockIfOverheated?: boolean;
+  indicatorConditions?: StrategyMarketContextCondition[];
+}
+
+export interface StrategyMarketContextSnapshot {
+  timestamp: string;
+  marketRegime: MarketRegime;
+  btcPrice: number;
+  btcLongMaDays: number;
+  btcLongMa: number;
+  btcPriceVsLongMaPct: number;
+  btcAth: number;
+  btcDrawdownFromAthPct: number;
+  daysSinceHalving: number;
+  halvingPhase: BtcHalvingPhase;
+  overheatingWarning: boolean;
+  overheatingScore: number;
+  btcDominance?: number;
+  btcDominanceTrendPct?: number;
+}
+
+export interface StrategyMarketGateFilterResult {
+  label: string;
+  passed: boolean;
+  actualValue: string;
+  expectedValue: string;
+}
+
+export interface StrategyMarketGateConditionResult {
+  indicator: StrategyMarketContextIndicator;
+  operator: StrategyOperator;
+  expectedValue: number;
+  actualValue: number;
+  passed: boolean;
+}
+
+export interface StrategyMarketGateResult {
+  configured: boolean;
+  passed: boolean;
+  blockingReasons: string[];
+  filterResults: StrategyMarketGateFilterResult[];
+  conditionResults: StrategyMarketGateConditionResult[];
+}
+
 export interface StrategyScoreComponents {
   recent_return: number;
   drawdown_penalty: number;
@@ -444,6 +506,7 @@ export interface StrategyConfig {
   autoStrategyUsage?: boolean;
   strategySelectionConfig?: StrategySelectionConfig;
   weightAdjustmentConfig?: StrategyWeightAdjustmentConfig;
+  marketContextConfig?: StrategyMarketContextConfig;
   createdAt: string;
   updatedAt: string;
 }
@@ -484,10 +547,13 @@ export interface StrategyRun {
   inputSnapshot?: {
     portfolio: PortfolioState;
     marketSignals: MarketSignalSnapshot;
+    marketContext?: StrategyMarketContextSnapshot;
   };
   adjustedAllocation?: AllocationMap;
   executionPlanId?: string;
   warnings: string[];
+  marketGate?: StrategyMarketGateResult;
+  skipReason?: string;
   error?: string;
 }
 
@@ -532,6 +598,8 @@ export interface StrategyStateResponse {
   adjustedTargetAllocation: AllocationMap;
   portfolio: PortfolioState;
   signals: MarketSignalSnapshot;
+  marketContext?: StrategyMarketContextSnapshot;
+  marketGate?: StrategyMarketGateResult;
   executionPlan: ExecutionPlan;
   traces: RuleEvaluationTrace[];
   warnings: string[];
