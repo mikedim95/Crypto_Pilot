@@ -421,31 +421,47 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ message });
 });
 
-const server = app.listen(port, () => {
-  // Keep startup log minimal and avoid printing credentials.
-  console.log(`Backend listening on http://localhost:${port}`);
-});
-
-strategyScheduler.start().catch((error) => {
-  console.error("[strategy-scheduler] Failed to start:", error);
-});
-
-minerRepository
-  .init()
-  .then(() => {
-    minerPollingService.start();
-  })
-  .catch((error) => {
-    console.error("[miner-polling] Failed to initialize:", error);
-  });
+let server: ReturnType<typeof app.listen> | null = null;
 
 const shutdown = (): void => {
   strategyScheduler.stop();
   minerPollingService.stop();
+  if (!server) {
+    process.exit(0);
+    return;
+  }
+
   server.close(() => {
     process.exit(0);
   });
 };
+
+async function bootstrap(): Promise<void> {
+  await strategyRepository.init();
+
+  server = app.listen(port, () => {
+    // Keep startup log minimal and avoid printing credentials.
+    console.log(`Backend listening on http://localhost:${port}`);
+  });
+
+  strategyScheduler.start().catch((error) => {
+    console.error("[strategy-scheduler] Failed to start:", error);
+  });
+
+  minerRepository
+    .init()
+    .then(() => {
+      minerPollingService.start();
+    })
+    .catch((error) => {
+      console.error("[miner-polling] Failed to initialize:", error);
+    });
+}
+
+bootstrap().catch((error) => {
+  console.error("[bootstrap] Failed to start backend:", error);
+  process.exit(1);
+});
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

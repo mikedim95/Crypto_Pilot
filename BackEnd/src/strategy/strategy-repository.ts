@@ -72,6 +72,12 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   return parsed;
 }
 
+function parseNonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) return fallback;
+  return parsed;
+}
+
 function normalizeUsername(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -109,6 +115,57 @@ function formatErrorMessage(error: unknown): string {
   if (typeof error === "string" && error.trim().length > 0) return error.trim();
   return "Unknown database error.";
 }
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+const RETRYABLE_DB_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "PROTOCOL_CONNECTION_LOST",
+  "ER_CON_COUNT_ERROR",
+  "ER_SERVER_SHUTDOWN",
+  "ER_CANT_CONNECT_TO_HOST",
+  "ER_GET_CONNECTION_TIMEOUT",
+]);
+
+function shouldRetryDatabaseInitialization(error: unknown): boolean {
+  if (error instanceof AggregateError) {
+    return error.errors.some((entry) => shouldRetryDatabaseInitialization(entry));
+  }
+
+  const code = extractErrorCode(error);
+  if (code && RETRYABLE_DB_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes("econnrefused") ||
+    message.includes("connect econnrefused") ||
+    message.includes("connection refused") ||
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("getaddrinfo") ||
+    message.includes("can't connect")
+  );
+}
+
+const DB_INIT_RETRY_INTERVAL_MS = parsePositiveInteger(
+  process.env.STRATEGY_DB_INIT_RETRY_INTERVAL_MS,
+  5_000
+);
+const DB_INIT_MAX_RETRIES = parseNonNegativeInteger(
+  process.env.STRATEGY_DB_INIT_MAX_RETRIES,
+  0
+);
 
 function createDefaultDemoAccountSettings(): DemoAccountSettings {
   return {
@@ -809,25 +866,42 @@ export class StrategyRepository {
   }
 
   private async initialize(): Promise<void> {
-    try {
-      await this.withConnection(async (conn) => {
-        await this.ensureSchema(conn);
-        await this.seedDummyUsers(conn);
-        await this.resolveActiveUser(conn);
-        await this.ensureStoreForUser(conn, this.requireActiveUserId(), { allowLegacyImport: true });
-      });
+    let retries = 0;
 
-      this.storageMode = "database";
-      this.databaseAvailable = true;
-      this.initFailureMessage = null;
-      this.initialized = true;
+    while (true) {
+      try {
+        await this.withConnection(async (conn) => {
+          await this.ensureSchema(conn);
+          await this.seedDummyUsers(conn);
+          await this.resolveActiveUser(conn);
+          await this.ensureStoreForUser(conn, this.requireActiveUserId(), { allowLegacyImport: true });
+        });
 
-      const scopes = await this.listUserScopes();
-      for (const scope of scopes) {
-        await this.markInterruptedRunsAsFailed(scope);
+        this.storageMode = "database";
+        this.databaseAvailable = true;
+        this.initFailureMessage = null;
+        this.initialized = true;
+
+        const scopes = await this.listUserScopes();
+        for (const scope of scopes) {
+          await this.markInterruptedRunsAsFailed(scope);
+        }
+        return;
+      } catch (error) {
+        if (shouldRetryDatabaseInitialization(error) && (DB_INIT_MAX_RETRIES === 0 || retries < DB_INIT_MAX_RETRIES)) {
+          retries += 1;
+          this.initFailureMessage = formatErrorMessage(error);
+          console.warn(
+            `[strategy-repository] Database unavailable during initialization (attempt ${retries}). ` +
+              `Retrying in ${DB_INIT_RETRY_INTERVAL_MS}ms: ${this.initFailureMessage}`
+          );
+          await delay(DB_INIT_RETRY_INTERVAL_MS);
+          continue;
+        }
+
+        await this.initializeOffline(error);
+        return;
       }
-    } catch (error) {
-      await this.initializeOffline(error);
     }
   }
 
