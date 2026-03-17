@@ -60,6 +60,16 @@ export function useDecisionIntelligence(accountType: PortfolioAccountType = "rea
   });
 }
 
+export function useSignalReview(accountType: PortfolioAccountType = "real", limit = 25) {
+  return useQuery({
+    queryKey: ["signal-review", accountType, limit],
+    queryFn: () => backendApi.getSignalReview(accountType, limit),
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+}
+
 export function useBinanceConnection() {
   return useQuery({
     queryKey: ["binance-connection"],

@@ -27,6 +27,9 @@ import { MinerRepository as FleetMinerRepository } from "./miners/miner-reposito
 import { MinerVerifyService } from "./miners/miner-verify-service.js";
 import { createDecisionRouter } from "./decision/decision-api.js";
 import { DecisionIntelligenceService } from "./decision/decision-service.js";
+import { createExecutionRouter } from "./execution/execution-api.js";
+import { ExecutionGuardrailService } from "./execution/execution-guardrail-service.js";
+import { SignalOutcomeService } from "./execution/signal-review-service.js";
 import { createNewsRouter } from "./news/news-api.js";
 import { BtcNewsInsightsService } from "./news/news-service.js";
 import {
@@ -89,6 +92,13 @@ const minerCommandService = new MinerCommandService(minerRepository, minerHttpCl
 const minerPollingService = new MinerPollingService(minerRepository, minerReadService, minerPollMs);
 const btcNewsInsightsService = new BtcNewsInsightsService();
 const decisionIntelligenceService = new DecisionIntelligenceService(strategyRepository, btcNewsInsightsService);
+const signalOutcomeService = new SignalOutcomeService(historicalCandleProvider);
+const executionGuardrailService = new ExecutionGuardrailService(
+  strategyRepository,
+  decisionIntelligenceService,
+  btcNewsInsightsService,
+  signalOutcomeService
+);
 
 function round(value: number, digits = 2): number {
   const factor = 10 ** digits;
@@ -529,6 +539,14 @@ app.use(
 
 app.use(
   "/api",
+  createExecutionRouter({
+    executionGuardrailService,
+    signalOutcomeService,
+  })
+);
+
+app.use(
+  "/api",
   createMinerRouter({
     repository: minerRepository,
     verifyService: minerVerifyService,
@@ -571,6 +589,7 @@ const shutdown = (): void => {
 
 async function bootstrap(): Promise<void> {
   await strategyRepository.init();
+  await signalOutcomeService.init();
 
   server = app.listen(port, () => {
     // Keep startup log minimal and avoid printing credentials.

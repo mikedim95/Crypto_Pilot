@@ -9,6 +9,8 @@ import type {
   BtcNewsInsightsResponse,
   ConnectionStatus,
   DecisionIntelligenceResponse,
+  ExecutionGuardrailEvaluationRequest,
+  ExecutionGuardrailEvaluationResponse,
   DemoAccountInitializeRequest,
   DemoAccountSettingsResponse,
   CreateBacktestResponse,
@@ -37,6 +39,7 @@ import type {
   RebalanceAllocationProfileResponse,
   RebalanceAllocationProfilesResponse,
   RebalanceAllocationStateResponse,
+  SignalReviewResponse,
   SessionLoginResponse,
   SessionStatusResponse,
   StrategiesResponse,
@@ -188,6 +191,13 @@ export const backendApi = {
   getBtcNewsInsights: () => apiRequest<BtcNewsInsightsResponse>("/api/news/btc/insights"),
   getDecisionIntelligence: (accountType: PortfolioAccountType = "real") =>
     apiRequest<DecisionIntelligenceResponse>(withQuery("/api/decision/intelligence", { accountType })),
+  evaluateExecutionGuardrails: (body: ExecutionGuardrailEvaluationRequest) =>
+    apiRequest<ExecutionGuardrailEvaluationResponse>("/api/execution/guardrails/evaluate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getSignalReview: (accountType: PortfolioAccountType = "real", limit = 25) =>
+    apiRequest<SignalReviewResponse>(withQuery("/api/signals/review", { accountType, limit: String(limit) })),
   getMiningOverview: () => apiRequest<MiningOverviewResponse>("/api/mining/overview"),
   getNicehashOverview: () => apiRequest<NicehashOverviewResponse>("/api/mining/nicehash"),
   verifyMinerDraft: (body: { name: string; ip: string; password: string }) =>

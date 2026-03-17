@@ -9,6 +9,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ExecutionSafetyPanel } from "@/components/decision/ExecutionSafetyPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDecisionIntelligence } from "@/hooks/useTradingData";
 import { cn } from "@/lib/utils";
@@ -395,6 +396,8 @@ export function DecisionIntelligencePage({ accountType }: DecisionIntelligencePa
           </div>
         </div>
       </div>
+
+      <ExecutionSafetyPanel accountType={accountType} decision={decision} />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <ListCard

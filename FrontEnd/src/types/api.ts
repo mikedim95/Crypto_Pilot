@@ -393,6 +393,83 @@ export interface DecisionIntelligenceResponse {
   summary: string;
 }
 
+export type ExecutionGuardrailAction = "buy" | "sell" | "hold";
+export type ExecutionGuardrailStatus = "allowed" | "reduced" | "blocked";
+
+export interface ExecutionGuardrailEvaluationRequest {
+  accountType?: PortfolioAccountType;
+  proposedAction: ExecutionGuardrailAction;
+  asset: string;
+  requestedSize: number;
+  decisionContext?: Partial<DecisionIntelligenceResponse>;
+  currentPortfolioExposure?: {
+    assetExposurePct?: number;
+    btcExposurePct?: number;
+  };
+  volatilityMetric?: number;
+}
+
+export interface ExecutionGuardrailEvaluationResponse {
+  allowed: boolean;
+  status: ExecutionGuardrailStatus;
+  adjusted_size: number | null;
+  reasons: string[];
+  triggered_guardrails: string[];
+}
+
+export interface SignalReviewMetricGroup {
+  key: string;
+  label: string;
+  reviewed_count: number;
+  win_rate: number;
+}
+
+export interface SignalReviewSummary {
+  average_helpfulness: number | null;
+  total_signals: number;
+  reviewed_signal_count: number;
+  pending_review_count: number;
+  win_rate_by_recommendation: SignalReviewMetricGroup[];
+  win_rate_by_regime: SignalReviewMetricGroup[];
+  win_rate_by_news_state: SignalReviewMetricGroup[];
+}
+
+export interface SignalReviewItem {
+  id: string;
+  created_at: string;
+  account_type: PortfolioAccountType;
+  asset: string;
+  technical_score: number;
+  news_score: number;
+  final_score: number;
+  recommendation: DecisionRecommendation;
+  confidence: number;
+  market_regime: DecisionMarketRegime;
+  action_taken: ExecutionGuardrailAction;
+  requested_size: number | null;
+  adjusted_size: number | null;
+  guardrail_status: ExecutionGuardrailStatus;
+  news_state: BtcNewsCurrentState;
+  price_at_signal: number | null;
+  price_after_1h: number | null;
+  price_after_6h: number | null;
+  price_after_24h: number | null;
+  pnl_after_1h: number | null;
+  pnl_after_6h: number | null;
+  pnl_after_24h: number | null;
+  was_helpful_1h: boolean | null;
+  was_helpful_6h: boolean | null;
+  was_helpful_24h: boolean | null;
+  reasons: string[];
+  triggered_guardrails: string[];
+}
+
+export interface SignalReviewResponse {
+  summary: SignalReviewSummary;
+  signals: SignalReviewItem[];
+  generated_at: string;
+}
+
 export interface MinerBasicInfo {
   id: string;
   name: string;
