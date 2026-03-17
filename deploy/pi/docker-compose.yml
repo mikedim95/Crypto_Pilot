@@ -61,7 +61,7 @@ services:
       MYSQL_DATABASE: "${MYSQL_DATABASE:-mytrader}"
       MYSQL_USER: "${MYSQL_USER:-mytrader}"
       MYSQL_PASSWORD: "${MYSQL_PASSWORD:-change-me}"
-      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-root-change-me}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-change-me}"
     volumes:
       - mysql_data:/var/lib/mysql
     ports:
@@ -74,7 +74,7 @@ services:
           "ping",
           "-h",
           "127.0.0.1",
-          "-p${MYSQL_ROOT_PASSWORD:-root-change-me}",
+          "-p${MYSQL_ROOT_PASSWORD:-change-me}",
         ]
       interval: 10s
       timeout: 5s
