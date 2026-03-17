@@ -5,6 +5,7 @@ import { BacktestEngine } from "./backtest-engine.js";
 import { computeBacktestMetrics } from "./performance-metrics.js";
 import { buildBacktestReport } from "./simulation-reporter.js";
 import { mergeStrategyUpdate, validateStrategyDsl } from "./strategy-dsl-parser.js";
+import { StrategyJobService } from "./strategy-job-service.js";
 import { StrategyRepository } from "./strategy-repository.js";
 import { StrategyRunner } from "./strategy-runner.js";
 import { createNextRunAt, parseScheduleIntervalToMs } from "./allocation-utils.js";
@@ -47,6 +48,18 @@ const backtestMarketPreviewSchema = z.object({
   timeframe: z.enum(["1h", "1d"]).default("1d"),
   symbol: z.string().trim().min(1).default("BTC"),
 });
+const historicalCandleSyncSchema = z.object({
+  symbol: z.string().trim().min(1),
+  interval: z.enum(["1h", "1d"]),
+  startTime: isoOrDateSchema,
+  endTime: isoOrDateSchema,
+});
+const strategyJobQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  strategyId: z.string().trim().min(1).optional(),
+  type: z.enum(["sync_historical_candles", "run_backtest", "evaluate_strategy_candidate", "refresh_projected_outcome"]).optional(),
+  status: z.enum(["pending", "running", "completed", "failed"]).optional(),
+});
 
 const accountTypeSchema = z.enum(["real", "demo"]);
 const demoAccountBalanceSchema = z.object({
@@ -88,6 +101,7 @@ interface StrategyApiDeps {
   repository: StrategyRepository;
   runner: StrategyRunner;
   backtestEngine: BacktestEngine;
+  jobService: StrategyJobService;
 }
 
 function sendNotFound(res: express.Response, entity: string, id: string): void {
@@ -600,18 +614,17 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
     }
 
     try {
-      const evaluation = await deps.backtestEngine.evaluateCandidateStrategy(
+      const job = await deps.jobService.enqueueCandidateEvaluation(
         {
           strategyId: strategy.id,
           ...parsed.data,
         },
         userScope
       );
-      const updatedStrategy = await deps.repository.getStrategy(strategy.id, userScope);
-      res.status(201).json({ strategy: updatedStrategy ?? strategy, evaluation });
+      res.status(202).json({ strategy, job });
     } catch (error) {
       res.status(400).json({
-        message: error instanceof Error ? error.message : "Unable to evaluate candidate strategy.",
+        message: error instanceof Error ? error.message : "Unable to queue candidate evaluation.",
       });
     }
   });
@@ -808,6 +821,38 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
     res.json({ run, executionPlan });
   });
 
+  router.get("/strategy-jobs", async (req, res) => {
+    const userScope = resolveStrategyUserScope(req);
+    const parsed = strategyJobQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid strategy job query.", errors: parsed.error.issues });
+      return;
+    }
+
+    try {
+      const jobs = await deps.repository.listStrategyJobs(parsed.data, userScope);
+      res.json({ jobs });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : "Unable to list strategy jobs." });
+    }
+  });
+
+  router.get("/strategy-jobs/:id", async (req, res) => {
+    const userScope = resolveStrategyUserScope(req);
+
+    try {
+      const job = await deps.repository.getStrategyJob(req.params.id, userScope);
+      if (!job) {
+        sendNotFound(res, "Strategy job", req.params.id);
+        return;
+      }
+
+      res.json({ job });
+    } catch (error) {
+      res.status(500).json({ message: error instanceof Error ? error.message : "Unable to load strategy job." });
+    }
+  });
+
   router.post("/backtests", async (req, res) => {
     const userScope = resolveStrategyUserScope(req);
     const parsed = backtestRequestSchema.safeParse(req.body);
@@ -823,12 +868,31 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
     }
 
     try {
-      const result = userScope
-        ? await deps.backtestEngine.runBacktest(request, userScope)
-        : await deps.backtestEngine.runBacktest(request);
-      res.status(201).json({ backtestRun: result.run, steps: result.steps.length });
+      const job = await deps.jobService.enqueueBacktest(request, userScope);
+      res.status(202).json({ job });
     } catch (error) {
-      res.status(400).json({ message: error instanceof Error ? error.message : "Backtest failed." });
+      res.status(400).json({ message: error instanceof Error ? error.message : "Unable to queue backtest." });
+    }
+  });
+
+  router.post("/historical-candles/sync", async (req, res) => {
+    const userScope = resolveStrategyUserScope(req);
+    const parsed = historicalCandleSyncSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid historical candle sync payload.", errors: parsed.error.issues });
+      return;
+    }
+
+    if (new Date(parsed.data.startTime) >= new Date(parsed.data.endTime)) {
+      res.status(400).json({ message: "startTime must be before endTime." });
+      return;
+    }
+
+    try {
+      const job = await deps.jobService.enqueueHistoricalCandleSync(parsed.data, userScope);
+      res.status(202).json({ job });
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Unable to queue candle sync." });
     }
   });
 

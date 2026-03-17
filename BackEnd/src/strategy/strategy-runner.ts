@@ -154,6 +154,40 @@ export class StrategyRunner {
     return null;
   }
 
+  private async createRiskBlockAlert(
+    strategy: StrategyConfig,
+    accountType: PortfolioAccountType,
+    trigger: StrategyRun["trigger"],
+    userScope: StrategyUserScope | undefined,
+    message: string
+  ): Promise<void> {
+    if (accountType !== "real") {
+      return;
+    }
+
+    const type = GLOBAL_KILL_SWITCH_ENABLED ? "kill_switch_active" : "approval_blocked_real_run";
+
+    try {
+      await this.repository.createAlert({
+        type,
+        severity: GLOBAL_KILL_SWITCH_ENABLED ? "error" : "warning",
+        message,
+        payload: {
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          approvalState: strategy.approvalState,
+          trigger,
+          userScope,
+        },
+      });
+    } catch (error) {
+      console.error(
+        `[strategy-runner] unable to persist ${type} alert for strategy=${strategy.id}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
   private async evaluateResolvedStrategy(
     strategy: StrategyConfig,
     accountType: PortfolioAccountType,
@@ -324,6 +358,7 @@ export class StrategyRunner {
 
     const liveRiskBlockReason = this.getLiveRiskBlockReason(strategy, accountType);
     if (liveRiskBlockReason) {
+      await this.createRiskBlockAlert(strategy, accountType, trigger, userScope, liveRiskBlockReason);
       const skipped = await this.repository.createStrategyRun(
         {
           strategyId,

@@ -71,6 +71,24 @@ export const BACKTEST_RUN_STATUSES = ["pending", "running", "completed", "failed
 export type BacktestRunStatus = (typeof BACKTEST_RUN_STATUSES)[number];
 export const STRATEGY_APPROVAL_STATES = ["draft", "testing", "paper", "approved", "rejected"] as const;
 export type StrategyApprovalState = (typeof STRATEGY_APPROVAL_STATES)[number];
+export const STRATEGY_JOB_TYPES = [
+  "sync_historical_candles",
+  "run_backtest",
+  "evaluate_strategy_candidate",
+  "refresh_projected_outcome",
+] as const;
+export type StrategyJobType = (typeof STRATEGY_JOB_TYPES)[number];
+export const STRATEGY_JOB_STATUSES = ["pending", "running", "completed", "failed"] as const;
+export type StrategyJobStatus = (typeof STRATEGY_JOB_STATUSES)[number];
+export const STRATEGY_ALERT_TYPES = [
+  "candle_sync_failure",
+  "stale_historical_data",
+  "evaluation_failure",
+  "scheduler_job_failure",
+  "approval_blocked_real_run",
+  "kill_switch_active",
+] as const;
+export type StrategyAlertType = (typeof STRATEGY_ALERT_TYPES)[number];
 
 export type AllocationMap = Record<string, number>;
 
@@ -545,6 +563,18 @@ export interface HistoricalMarketPoint {
   signals: MarketSignalSnapshot;
 }
 
+export interface HistoricalCandle {
+  symbol: string;
+  interval: "1h" | "1d";
+  openTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  closeTime: number;
+}
+
 export interface HistoricalMarketDataRequest {
   symbols: string[];
   startDate: string;
@@ -553,8 +583,49 @@ export interface HistoricalMarketDataRequest {
   baseCurrency: string;
 }
 
+export interface HistoricalCandleProvider {
+  getCandles(
+    symbol: string,
+    interval: "1h" | "1d",
+    startTime: number,
+    endTime: number
+  ): Promise<HistoricalCandle[]>;
+}
+
 export interface HistoricalMarketDataSource {
   getSeries(request: HistoricalMarketDataRequest): Promise<HistoricalMarketPoint[]>;
+}
+
+export interface HistoricalCandleSyncRequest {
+  symbol: string;
+  interval: "1h" | "1d";
+  startTime: string;
+  endTime: string;
+}
+
+export interface StrategyJob {
+  id: string;
+  type: StrategyJobType;
+  status: StrategyJobStatus;
+  payload: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  attempts: number;
+  maxAttempts: number;
+  nextRunAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StrategyAlert {
+  id: string;
+  type: StrategyAlertType;
+  severity: "warning" | "error";
+  message: string;
+  payload?: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface StrategyStoreData {

@@ -342,7 +342,7 @@ export class BacktestEngine {
       recommendedApprovalState,
       notes: [
         "Training and validation backtests reuse the same deterministic strategy engine as live evaluation.",
-        "Historical replay still uses the current built-in mock market data source.",
+        "Historical replay uses the persisted candle provider with exchange backfill for missing ranges.",
       ],
     };
 

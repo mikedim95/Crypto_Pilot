@@ -224,6 +224,28 @@ export function useStrategyRunDetails(runId: string | undefined) {
   });
 }
 
+export function useStrategyJobs(strategyId: string | undefined, limit = 12) {
+  return useQuery({
+    queryKey: ["strategy-jobs", strategyId, limit],
+    queryFn: () => backendApi.getStrategyJobs({ strategyId, limit }),
+    enabled: Boolean(strategyId),
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    retry: 1,
+  });
+}
+
+export function useStrategyJob(jobId: string | undefined) {
+  return useQuery({
+    queryKey: ["strategy-job", jobId],
+    queryFn: () => backendApi.getStrategyJob(jobId ?? ""),
+    enabled: Boolean(jobId),
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    retry: 1,
+  });
+}
+
 export function useBacktests() {
   return useQuery({
     queryKey: ["backtests"],

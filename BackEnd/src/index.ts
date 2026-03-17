@@ -37,7 +37,12 @@ import {
 } from "./portfolioService.js";
 import type { DashboardResponse } from "./types.js";
 import { BacktestEngine } from "./strategy/backtest-engine.js";
+import {
+  PersistedHistoricalCandleProvider,
+  PersistedHistoricalMarketDataSource,
+} from "./strategy/historical-market-data.js";
 import { getDemoPortfolioState, getPortfolioState } from "./strategy/portfolio-state-service.js";
+import { StrategyJobService } from "./strategy/strategy-job-service.js";
 import { StrategyRepository } from "./strategy/strategy-repository.js";
 import { StrategyRunner } from "./strategy/strategy-runner.js";
 import { StrategyScheduler } from "./strategy/strategy-scheduler.js";
@@ -59,8 +64,16 @@ const minerPollMs = Number.isFinite(rawMinerPollMs) && rawMinerPollMs >= 5_000 ?
 
 const strategyRepository = new StrategyRepository(process.env.STRATEGY_STORE_PATH);
 const strategyRunner = new StrategyRunner(strategyRepository);
-const backtestEngine = new BacktestEngine(strategyRepository);
-const strategyScheduler = new StrategyScheduler(strategyRepository, strategyRunner, schedulerPollMs);
+const historicalCandleProvider = new PersistedHistoricalCandleProvider(strategyRepository);
+const historicalMarketDataSource = new PersistedHistoricalMarketDataSource(historicalCandleProvider);
+const backtestEngine = new BacktestEngine(strategyRepository, undefined, historicalMarketDataSource);
+const strategyJobService = new StrategyJobService(
+  strategyRepository,
+  backtestEngine,
+  strategyRunner,
+  historicalCandleProvider
+);
+const strategyScheduler = new StrategyScheduler(strategyRepository, strategyRunner, strategyJobService, schedulerPollMs);
 const minerRepository = new FleetMinerRepository();
 const minerCryptoService = new MinerCryptoService();
 const minerHttpClient = new MinerHttpClient();
@@ -512,6 +525,7 @@ app.use(
     repository: strategyRepository,
     runner: strategyRunner,
     backtestEngine,
+    jobService: strategyJobService,
   })
 );
 

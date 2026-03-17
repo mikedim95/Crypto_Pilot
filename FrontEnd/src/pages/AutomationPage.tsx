@@ -6,6 +6,7 @@ import {
   useBacktests,
   useStrategies,
   useStrategyEvaluations,
+  useStrategyJobs,
   useStrategyRunDetails,
   useStrategyRuns,
   useStrategyState,
@@ -19,6 +20,7 @@ import type {
   StrategyApprovalState,
   StrategyCandidateEvaluationSummary,
   StrategyConfig,
+  StrategyJob,
   StrategyMarketContextIndicator,
   StrategyMarketContextPriceFilter,
   StrategyMode,
@@ -238,6 +240,18 @@ const APPROVAL_STATE_CLASSES: Record<StrategyApprovalState, string> = {
   paper: "border-sky-500/30 bg-sky-500/10 text-sky-300",
   approved: "border-positive/30 bg-positive/10 text-positive",
   rejected: "border-negative/30 bg-negative/10 text-negative",
+};
+const STRATEGY_JOB_TYPE_LABELS: Record<StrategyJob["type"], string> = {
+  sync_historical_candles: "Candle Sync",
+  run_backtest: "Backtest",
+  evaluate_strategy_candidate: "Candidate Eval",
+  refresh_projected_outcome: "Outcome Refresh",
+};
+const STRATEGY_JOB_STATUS_CLASSES: Record<StrategyJob["status"], string> = {
+  pending: "border-border bg-secondary/30 text-muted-foreground",
+  running: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+  completed: "border-positive/30 bg-positive/10 text-positive",
+  failed: "border-negative/30 bg-negative/10 text-negative",
 };
 
 const MARKET_REGIME_LABELS: Record<MarketRegime, string> = {
@@ -1304,6 +1318,9 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
   } = useStrategyState(selectedStrategyId || undefined, accountType);
   const { data: selectedStrategyVersionsData } = useStrategyVersions(selectedStrategyId || undefined);
   const { data: selectedStrategyEvaluationsData } = useStrategyEvaluations(selectedStrategyId || undefined);
+  const { data: selectedStrategyJobsData, isPending: loadingStrategyJobs } = useStrategyJobs(
+    selectedStrategyId || undefined
+  );
   const selectedBaseStrategyIds = useMemo(
     () => (draft ? parseStrategyIdCsv(draft.baseStrategiesCsv) : []),
     [draft]
@@ -1374,8 +1391,11 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
   const selectedProjectedOutcome = selectedStrategyState?.projectedOutcome;
   const selectedStrategyVersions = selectedStrategyVersionsData?.versions ?? [];
   const selectedStrategyEvaluations = selectedStrategyEvaluationsData?.evaluations ?? [];
+  const selectedStrategyJobs = selectedStrategyJobsData?.jobs ?? [];
   const latestStrategyEvaluation: StrategyCandidateEvaluationSummary | null =
     selectedStrategy?.latestEvaluationSummary ?? selectedStrategyEvaluations[0] ?? null;
+  const latestBacktestJob = selectedStrategyJobs.find((job) => job.type === "run_backtest");
+  const latestEvaluationJob = selectedStrategyJobs.find((job) => job.type === "evaluate_strategy_candidate");
   const recentVersionHistory: StrategyVersionRecord[] = selectedStrategyVersions.slice(0, 3);
   const largestProjectedMoves = useMemo(
     () =>
@@ -1408,6 +1428,7 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
       tasks.push(queryClient.invalidateQueries({ queryKey: ["strategy-execution-plan", targetStrategyId, accountType] }));
       tasks.push(queryClient.invalidateQueries({ queryKey: ["strategy-versions", targetStrategyId] }));
       tasks.push(queryClient.invalidateQueries({ queryKey: ["strategy-evaluations", targetStrategyId] }));
+      tasks.push(queryClient.invalidateQueries({ queryKey: ["strategy-jobs", targetStrategyId] }));
     }
 
     await Promise.all(tasks);
@@ -1517,7 +1538,7 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
     mutationFn: (payload: BacktestCreateRequest) => backendApi.createBacktest(payload),
     onSuccess: async (result) => {
       setErrorMessage("");
-      toast.success(`Backtest ${result.backtestRun.id} started.`);
+      toast.success(`Backtest queued as job ${result.job.id}.`);
       setIsBacktestModalOpen(false);
       await invalidateAll();
     },
@@ -1539,9 +1560,7 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
       }),
     onSuccess: async (result) => {
       setErrorMessage("");
-      toast.success(
-        `Candidate evaluation completed. Validation ${formatSignedPercent(result.evaluation.validationMetrics.totalReturnPct)}.`
-      );
+      toast.success(`Candidate evaluation queued as job ${result.job.id}.`);
       await invalidateAll({ strategyId: result.strategy.id });
     },
     onError: (error) => {
@@ -2100,6 +2119,61 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
             ) : (
               <div className="text-xs text-muted-foreground">
                 No candidate evaluation yet. Use the current backtest window and capital to generate a train and validation report.
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2 rounded border border-border bg-secondary/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Async Jobs</div>
+              <div className="flex items-center gap-2 text-[11px] font-mono">
+                {latestEvaluationJob ? (
+                  <span className={cn("rounded-full border px-2 py-0.5", STRATEGY_JOB_STATUS_CLASSES[latestEvaluationJob.status])}>
+                    Eval {latestEvaluationJob.status}
+                  </span>
+                ) : null}
+                {latestBacktestJob ? (
+                  <span className={cn("rounded-full border px-2 py-0.5", STRATEGY_JOB_STATUS_CLASSES[latestBacktestJob.status])}>
+                    Backtest {latestBacktestJob.status}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {loadingStrategyJobs ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <Skeleton key={`job-skeleton-${index}`} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : selectedStrategyJobs.length === 0 ? (
+              <div className="text-xs text-muted-foreground">
+                No queued or recent async jobs for this strategy yet.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {selectedStrategyJobs.slice(0, 5).map((job) => (
+                  <div
+                    key={job.id}
+                    className="rounded border border-border bg-secondary/30 p-2 text-xs font-mono"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-foreground">{STRATEGY_JOB_TYPE_LABELS[job.type]}</div>
+                      <span className={cn("rounded-full border px-2 py-0.5", STRATEGY_JOB_STATUS_CLASSES[job.status])}>
+                        {job.status}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                      <span>{formatDateTime(job.createdAt)}</span>
+                      <span>
+                        Attempt {job.attempts}/{job.maxAttempts}
+                      </span>
+                      {job.result?.backtestRunId ? <span>Run {String(job.result.backtestRunId)}</span> : null}
+                      {job.result?.evaluationId ? <span>Evaluation {String(job.result.evaluationId)}</span> : null}
+                    </div>
+                    {job.error ? <div className="mt-1 text-[11px] text-negative">{job.error}</div> : null}
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -3454,7 +3528,7 @@ export function AutomationPage({ accountType }: AutomationPageProps) {
       </div>
 
       <div className="text-[11px] text-muted-foreground">
-        {busy ? <SpinnerValue loading value={undefined} /> : "Scheduler, strategy runs, and backtests auto-refresh every 20-30 seconds."}
+        {busy ? <SpinnerValue loading value={undefined} /> : "Scheduler, strategy runs, async jobs, and backtests auto-refresh every 5-30 seconds."}
       </div>
 
       <BacktestRunnerModal

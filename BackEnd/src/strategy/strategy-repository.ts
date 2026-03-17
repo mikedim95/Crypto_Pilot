@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import mysql, { Pool, PoolConnection, RowDataPacket } from "mysql2/promise";
+import mysql, { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import {
   BacktestRun,
   BacktestRunStatus,
@@ -9,10 +9,16 @@ import {
   DemoAccountHolding,
   DemoAccountSettings,
   ExecutionPlan,
+  HistoricalCandle,
   RebalanceAllocationProfile,
+  StrategyAlert,
+  StrategyAlertType,
   StrategyApprovalState,
   StrategyCandidateEvaluationSummary,
   StrategyConfig,
+  StrategyJob,
+  StrategyJobStatus,
+  StrategyJobType,
   StrategyRiskControls,
   StrategyRun,
   StrategyRunStatus,
@@ -133,6 +139,90 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const safeSize = Math.max(1, Math.floor(size));
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += safeSize) {
+    chunks.push(items.slice(index, index + safeSize));
+  }
+  return chunks;
+}
+
+function toSqlDateTime(value: string | Date = new Date()): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return new Date(date.getTime() - date.getMilliseconds()).toISOString().slice(0, 19).replace("T", " ");
+}
+
+function fromSqlDateTime(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const parsed = new Date(normalized);
+  if (!Number.isFinite(parsed.getTime())) {
+    return undefined;
+  }
+  return parsed.toISOString();
+}
+
+function parseJsonField<T>(value: unknown, fallback: T): T {
+  if (value == null) {
+    return fallback;
+  }
+
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+
+  if (typeof value === "object") {
+    return value as T;
+  }
+
+  return fallback;
+}
+
+interface HistoricalCandleRow extends RowDataPacket {
+  symbol: string;
+  interval_value: "1h" | "1d";
+  open_time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  close_time: number;
+}
+
+interface StrategyJobRow extends RowDataPacket {
+  id: string;
+  type: StrategyJobType;
+  status: StrategyJobStatus;
+  payload: unknown;
+  result: unknown;
+  error: string | null;
+  attempts: number;
+  max_attempts: number;
+  next_run_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface StrategyAlertRow extends RowDataPacket {
+  id: string;
+  type: StrategyAlertType;
+  severity: "warning" | "error";
+  message: string;
+  payload: unknown;
+  created_at: string;
+}
+
 const RETRYABLE_DB_ERROR_CODES = new Set([
   "ECONNREFUSED",
   "ECONNRESET",
@@ -217,6 +307,123 @@ function normalizeStrategyRiskControls(entry: unknown): StrategyRiskControls {
         : undefined,
     requirePositiveValidationReturn: shape.requirePositiveValidationReturn !== false,
     requireTrainValidationSplit: shape.requireTrainValidationSplit !== false,
+  };
+}
+
+function normalizeHistoricalCandle(entry: Partial<HistoricalCandle>): HistoricalCandle | null {
+  const symbol = typeof entry.symbol === "string" ? entry.symbol.trim().toUpperCase() : "";
+  const interval = entry.interval === "1h" ? "1h" : entry.interval === "1d" ? "1d" : null;
+  const openTime =
+    typeof entry.openTime === "number" && Number.isFinite(entry.openTime) && entry.openTime >= 0 ? entry.openTime : null;
+  const closeTime =
+    typeof entry.closeTime === "number" && Number.isFinite(entry.closeTime) && entry.closeTime >= 0 ? entry.closeTime : null;
+  const open = typeof entry.open === "number" && Number.isFinite(entry.open) && entry.open > 0 ? entry.open : null;
+  const high = typeof entry.high === "number" && Number.isFinite(entry.high) && entry.high > 0 ? entry.high : null;
+  const low = typeof entry.low === "number" && Number.isFinite(entry.low) && entry.low > 0 ? entry.low : null;
+  const close = typeof entry.close === "number" && Number.isFinite(entry.close) && entry.close > 0 ? entry.close : null;
+  const volume =
+    typeof entry.volume === "number" && Number.isFinite(entry.volume) && entry.volume >= 0 ? entry.volume : null;
+
+  if (!symbol || !interval || openTime === null || closeTime === null || open === null || high === null || low === null || close === null || volume === null) {
+    return null;
+  }
+
+  return {
+    symbol,
+    interval,
+    openTime,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    closeTime,
+  };
+}
+
+function normalizeStrategyJob(entry: Partial<StrategyJob>): StrategyJob | null {
+  const id = typeof entry.id === "string" && entry.id.trim().length > 0 ? entry.id : null;
+  const type =
+    entry.type === "sync_historical_candles" ||
+    entry.type === "run_backtest" ||
+    entry.type === "evaluate_strategy_candidate" ||
+    entry.type === "refresh_projected_outcome"
+      ? entry.type
+      : null;
+  const status =
+    entry.status === "pending" || entry.status === "running" || entry.status === "completed" || entry.status === "failed"
+      ? entry.status
+      : null;
+  const payload =
+    entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
+      ? (entry.payload as Record<string, unknown>)
+      : {};
+  const result =
+    entry.result && typeof entry.result === "object" && !Array.isArray(entry.result)
+      ? (entry.result as Record<string, unknown>)
+      : undefined;
+  const attempts =
+    typeof entry.attempts === "number" && Number.isInteger(entry.attempts) && entry.attempts >= 0 ? entry.attempts : 0;
+  const maxAttempts =
+    typeof entry.maxAttempts === "number" && Number.isInteger(entry.maxAttempts) && entry.maxAttempts > 0
+      ? entry.maxAttempts
+      : 3;
+  const nextRunAt = typeof entry.nextRunAt === "string" && entry.nextRunAt.trim().length > 0 ? entry.nextRunAt : null;
+  const createdAt = typeof entry.createdAt === "string" && entry.createdAt.trim().length > 0 ? entry.createdAt : null;
+  const updatedAt = typeof entry.updatedAt === "string" && entry.updatedAt.trim().length > 0 ? entry.updatedAt : null;
+
+  if (!id || !type || !status || !nextRunAt || !createdAt || !updatedAt) {
+    return null;
+  }
+
+  return {
+    id,
+    type,
+    status,
+    payload,
+    result,
+    error: typeof entry.error === "string" && entry.error.trim().length > 0 ? entry.error.trim() : undefined,
+    attempts,
+    maxAttempts,
+    nextRunAt,
+    startedAt: typeof entry.startedAt === "string" && entry.startedAt.trim().length > 0 ? entry.startedAt : undefined,
+    finishedAt:
+      typeof entry.finishedAt === "string" && entry.finishedAt.trim().length > 0 ? entry.finishedAt : undefined,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeStrategyAlert(entry: Partial<StrategyAlert>): StrategyAlert | null {
+  const id = typeof entry.id === "string" && entry.id.trim().length > 0 ? entry.id : null;
+  const type =
+    entry.type === "candle_sync_failure" ||
+    entry.type === "stale_historical_data" ||
+    entry.type === "evaluation_failure" ||
+    entry.type === "scheduler_job_failure" ||
+    entry.type === "approval_blocked_real_run" ||
+    entry.type === "kill_switch_active"
+      ? entry.type
+      : null;
+  const severity = entry.severity === "warning" || entry.severity === "error" ? entry.severity : null;
+  const message = typeof entry.message === "string" && entry.message.trim().length > 0 ? entry.message.trim() : null;
+  const createdAt = typeof entry.createdAt === "string" && entry.createdAt.trim().length > 0 ? entry.createdAt : null;
+  const payload =
+    entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
+      ? (entry.payload as Record<string, unknown>)
+      : undefined;
+
+  if (!id || !type || !severity || !message || !createdAt) {
+    return null;
+  }
+
+  return {
+    id,
+    type,
+    severity,
+    message,
+    payload,
+    createdAt,
   };
 }
 
@@ -841,6 +1048,14 @@ export class StrategyRepository {
     }
   }
 
+  private async withDatabaseConnection<T>(handler: (conn: PoolConnection) => Promise<T>): Promise<T> {
+    await this.init();
+    if (this.storageMode !== "database") {
+      throw new Error("This operation requires database-backed strategy storage.");
+    }
+    return this.withConnection(handler);
+  }
+
   private async ensureSchema(conn: PoolConnection): Promise<void> {
     await conn.query(`
       CREATE TABLE IF NOT EXISTS agent_users (
@@ -871,6 +1086,56 @@ export class StrategyRepository {
         CONSTRAINT fk_strategy_user_store_user
           FOREIGN KEY (user_id) REFERENCES agent_users(id)
           ON DELETE CASCADE
+      ) ENGINE=InnoDB
+    `);
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS historical_candles (
+        symbol VARCHAR(32) NOT NULL,
+        interval_value VARCHAR(8) NOT NULL,
+        open_time BIGINT UNSIGNED NOT NULL,
+        open DECIMAL(24, 10) NOT NULL,
+        high DECIMAL(24, 10) NOT NULL,
+        low DECIMAL(24, 10) NOT NULL,
+        close DECIMAL(24, 10) NOT NULL,
+        volume DECIMAL(28, 12) NOT NULL,
+        close_time BIGINT UNSIGNED NOT NULL,
+        PRIMARY KEY (symbol, interval_value, open_time),
+        KEY idx_historical_candles_symbol_interval_time (symbol, interval_value, open_time),
+        KEY idx_historical_candles_symbol_interval_close (symbol, interval_value, close_time)
+      ) ENGINE=InnoDB
+    `);
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS strategy_jobs (
+        id CHAR(36) NOT NULL PRIMARY KEY,
+        type VARCHAR(64) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        payload JSON NOT NULL,
+        result JSON NULL,
+        error TEXT NULL,
+        attempts INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3,
+        next_run_at DATETIME NOT NULL,
+        started_at DATETIME NULL,
+        finished_at DATETIME NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_strategy_jobs_status_next_run (status, next_run_at),
+        KEY idx_strategy_jobs_created_at (created_at)
+      ) ENGINE=InnoDB
+    `);
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS strategy_alerts (
+        id CHAR(36) NOT NULL PRIMARY KEY,
+        type VARCHAR(64) NOT NULL,
+        severity VARCHAR(16) NOT NULL,
+        message TEXT NOT NULL,
+        payload JSON NULL,
+        created_at DATETIME NOT NULL,
+        KEY idx_strategy_alerts_created_at (created_at),
+        KEY idx_strategy_alerts_type_created_at (type, created_at)
       ) ENGINE=InnoDB
     `);
   }
@@ -1272,6 +1537,7 @@ export class StrategyRepository {
           await this.markInterruptedRunsAsFailed(scope);
           await this.markInterruptedBacktestRunsAsFailed(scope);
         }
+        await this.recoverInterruptedStrategyJobs();
         return;
       } catch (error) {
         if (shouldRetryDatabaseInitialization(error) && (DB_INIT_MAX_RETRIES === 0 || retries < DB_INIT_MAX_RETRIES)) {
@@ -1964,5 +2230,501 @@ export class StrategyRepository {
         .filter((step) => step.backtestRunId === backtestRunId)
         .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
     );
+  }
+
+  async listHistoricalCandles(
+    symbol: string,
+    interval: HistoricalCandle["interval"],
+    startTime: number,
+    endTime: number
+  ): Promise<HistoricalCandle[]> {
+    return this.withDatabaseConnection(async (conn) => {
+      const [rows] = await conn.query<HistoricalCandleRow[]>(
+        `
+          SELECT symbol, interval_value, open_time, open, high, low, close, volume, close_time
+          FROM historical_candles
+          WHERE symbol = ?
+            AND interval_value = ?
+            AND open_time BETWEEN ? AND ?
+          ORDER BY open_time ASC
+        `,
+        [symbol.trim().toUpperCase(), interval, startTime, endTime]
+      );
+
+      return rows
+        .map((row) =>
+          normalizeHistoricalCandle({
+            symbol: row.symbol,
+            interval: row.interval_value,
+            openTime: Number(row.open_time),
+            open: Number(row.open),
+            high: Number(row.high),
+            low: Number(row.low),
+            close: Number(row.close),
+            volume: Number(row.volume),
+            closeTime: Number(row.close_time),
+          })
+        )
+        .filter((entry): entry is HistoricalCandle => entry !== null);
+    });
+  }
+
+  async saveHistoricalCandles(candles: HistoricalCandle[]): Promise<number> {
+    const normalizedCandles = candles
+      .map((entry) => normalizeHistoricalCandle(entry))
+      .filter((entry): entry is HistoricalCandle => entry !== null);
+
+    if (normalizedCandles.length === 0) {
+      return 0;
+    }
+
+    return this.withDatabaseConnection(async (conn) => {
+      let written = 0;
+
+      for (const batch of chunkArray(normalizedCandles, 250)) {
+        const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+        const params = batch.flatMap((candle) => [
+          candle.symbol,
+          candle.interval,
+          candle.openTime,
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+          candle.volume,
+          candle.closeTime,
+        ]);
+
+        const [result] = await conn.query<ResultSetHeader>(
+          `
+            INSERT INTO historical_candles (
+              symbol, interval_value, open_time, open, high, low, close, volume, close_time
+            )
+            VALUES ${placeholders}
+            ON DUPLICATE KEY UPDATE
+              open = VALUES(open),
+              high = VALUES(high),
+              low = VALUES(low),
+              close = VALUES(close),
+              volume = VALUES(volume),
+              close_time = VALUES(close_time)
+          `,
+          params
+        );
+
+        written += result.affectedRows;
+      }
+
+      return written;
+    });
+  }
+
+  async pruneHistoricalCandles(retentionBeforeTime: number): Promise<number> {
+    return this.withDatabaseConnection(async (conn) => {
+      const [result] = await conn.query<ResultSetHeader>(
+        `
+          DELETE FROM historical_candles
+          WHERE open_time < ?
+        `,
+        [retentionBeforeTime]
+      );
+      return result.affectedRows;
+    });
+  }
+
+  async createStrategyJob(input: {
+    type: StrategyJobType;
+    payload: Record<string, unknown>;
+    maxAttempts?: number;
+    nextRunAt?: string;
+  }): Promise<StrategyJob> {
+    const nowIso = new Date().toISOString();
+    const job = normalizeStrategyJob({
+      id: randomUUID(),
+      type: input.type,
+      status: "pending",
+      payload: input.payload,
+      attempts: 0,
+      maxAttempts:
+        typeof input.maxAttempts === "number" && Number.isInteger(input.maxAttempts) && input.maxAttempts > 0
+          ? input.maxAttempts
+          : 3,
+      nextRunAt: input.nextRunAt ?? nowIso,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+
+    if (!job) {
+      throw new Error("Invalid strategy job payload.");
+    }
+
+    return this.withDatabaseConnection(async (conn) => {
+      await conn.query(
+        `
+          INSERT INTO strategy_jobs (
+            id, type, status, payload, result, error, attempts, max_attempts,
+            next_run_at, started_at, finished_at, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, ?, ?)
+        `,
+        [
+          job.id,
+          job.type,
+          job.status,
+          JSON.stringify(job.payload),
+          job.attempts,
+          job.maxAttempts,
+          toSqlDateTime(job.nextRunAt),
+          toSqlDateTime(job.createdAt),
+          toSqlDateTime(job.updatedAt),
+        ]
+      );
+
+      return job;
+    });
+  }
+
+  async getStrategyJob(jobId: string, scope?: StrategyUserScope): Promise<StrategyJob | null> {
+    const normalizedScope = this.normalizeScope(scope);
+
+    return this.withDatabaseConnection(async (conn) => {
+      const conditions = ["id = ?"];
+      const params: unknown[] = [jobId];
+
+      if (normalizedScope?.userId) {
+        conditions.push("JSON_EXTRACT(payload, '$.userScope.userId') = ?");
+        params.push(normalizedScope.userId);
+      } else if (normalizedScope?.username) {
+        conditions.push("LOWER(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.userScope.username'))) = ?");
+        params.push(normalizedScope.username);
+      }
+
+      const [rows] = await conn.query<StrategyJobRow[]>(
+        `
+          SELECT id, type, status, payload, result, error, attempts, max_attempts, next_run_at, started_at,
+                 finished_at, created_at, updated_at
+          FROM strategy_jobs
+          WHERE ${conditions.join(" AND ")}
+          LIMIT 1
+        `,
+        params
+      );
+
+      const row = rows[0];
+      if (!row) {
+        return null;
+      }
+
+      return normalizeStrategyJob({
+        id: row.id,
+        type: row.type,
+        status: row.status,
+        payload: parseJsonField<Record<string, unknown>>(row.payload, {}),
+        result: parseJsonField<Record<string, unknown> | undefined>(row.result, undefined),
+        error: row.error ?? undefined,
+        attempts: Number(row.attempts),
+        maxAttempts: Number(row.max_attempts),
+        nextRunAt: fromSqlDateTime(row.next_run_at),
+        startedAt: fromSqlDateTime(row.started_at),
+        finishedAt: fromSqlDateTime(row.finished_at),
+        createdAt: fromSqlDateTime(row.created_at),
+        updatedAt: fromSqlDateTime(row.updated_at),
+      });
+    });
+  }
+
+  async listStrategyJobs(
+    options?: {
+      limit?: number;
+      strategyId?: string;
+      type?: StrategyJobType;
+      status?: StrategyJobStatus;
+    },
+    scope?: StrategyUserScope
+  ): Promise<StrategyJob[]> {
+    const normalizedScope = this.normalizeScope(scope);
+    const limit =
+      typeof options?.limit === "number" && Number.isInteger(options.limit) && options.limit > 0
+        ? Math.min(options.limit, 100)
+        : 25;
+
+    return this.withDatabaseConnection(async (conn) => {
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+
+      if (normalizedScope?.userId) {
+        conditions.push("JSON_EXTRACT(payload, '$.userScope.userId') = ?");
+        params.push(normalizedScope.userId);
+      } else if (normalizedScope?.username) {
+        conditions.push("LOWER(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.userScope.username'))) = ?");
+        params.push(normalizedScope.username);
+      }
+
+      if (options?.strategyId) {
+        conditions.push("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.strategyId')) = ?");
+        params.push(options.strategyId);
+      }
+
+      if (options?.type) {
+        conditions.push("type = ?");
+        params.push(options.type);
+      }
+
+      if (options?.status) {
+        conditions.push("status = ?");
+        params.push(options.status);
+      }
+
+      const [rows] = await conn.query<StrategyJobRow[]>(
+        `
+          SELECT id, type, status, payload, result, error, attempts, max_attempts, next_run_at, started_at,
+                 finished_at, created_at, updated_at
+          FROM strategy_jobs
+          ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
+          ORDER BY created_at DESC
+          LIMIT ?
+        `,
+        [...params, limit]
+      );
+
+      return rows
+        .map((row) =>
+          normalizeStrategyJob({
+            id: row.id,
+            type: row.type,
+            status: row.status,
+            payload: parseJsonField<Record<string, unknown>>(row.payload, {}),
+            result: parseJsonField<Record<string, unknown> | undefined>(row.result, undefined),
+            error: row.error ?? undefined,
+            attempts: Number(row.attempts),
+            maxAttempts: Number(row.max_attempts),
+            nextRunAt: fromSqlDateTime(row.next_run_at),
+            startedAt: fromSqlDateTime(row.started_at),
+            finishedAt: fromSqlDateTime(row.finished_at),
+            createdAt: fromSqlDateTime(row.created_at),
+            updatedAt: fromSqlDateTime(row.updated_at),
+          })
+        )
+        .filter((entry): entry is StrategyJob => entry !== null);
+    });
+  }
+
+  async claimDueStrategyJobs(nowIso: string, limit = 1): Promise<StrategyJob[]> {
+    return this.withDatabaseConnection(async (conn) => {
+      await conn.beginTransaction();
+
+      try {
+        const [rows] = await conn.query<StrategyJobRow[]>(
+          `
+            SELECT id, type, status, payload, result, error, attempts, max_attempts, next_run_at, started_at,
+                   finished_at, created_at, updated_at
+            FROM strategy_jobs
+            WHERE status = 'pending'
+              AND next_run_at <= ?
+            ORDER BY next_run_at ASC, created_at ASC
+            LIMIT ?
+            FOR UPDATE
+          `,
+          [toSqlDateTime(nowIso), Math.max(1, limit)]
+        );
+
+        if (rows.length === 0) {
+          await conn.commit();
+          return [];
+        }
+
+        const jobIds = rows.map((row) => row.id);
+        const updateTime = toSqlDateTime(nowIso);
+        const placeholders = jobIds.map(() => "?").join(", ");
+
+        await conn.query(
+          `
+            UPDATE strategy_jobs
+            SET status = 'running',
+                attempts = attempts + 1,
+                started_at = ?,
+                finished_at = NULL,
+                error = NULL,
+                updated_at = ?
+            WHERE id IN (${placeholders})
+          `,
+          [updateTime, updateTime, ...jobIds]
+        );
+
+        await conn.commit();
+
+        return rows
+          .map((row) =>
+            normalizeStrategyJob({
+              id: row.id,
+              type: row.type,
+              status: "running",
+              payload: parseJsonField<Record<string, unknown>>(row.payload, {}),
+              result: parseJsonField<Record<string, unknown> | undefined>(row.result, undefined),
+              attempts: Number(row.attempts) + 1,
+              maxAttempts: Number(row.max_attempts),
+              nextRunAt: fromSqlDateTime(row.next_run_at),
+              startedAt: fromSqlDateTime(updateTime),
+              finishedAt: undefined,
+              createdAt: fromSqlDateTime(row.created_at),
+              updatedAt: fromSqlDateTime(updateTime),
+            })
+          )
+          .filter((entry): entry is StrategyJob => entry !== null);
+      } catch (error) {
+        await conn.rollback();
+        throw error;
+      }
+    });
+  }
+
+  async completeStrategyJob(jobId: string, result: Record<string, unknown>): Promise<StrategyJob | null> {
+    return this.withDatabaseConnection(async (conn) => {
+      const completedAt = new Date().toISOString();
+      await conn.query(
+        `
+          UPDATE strategy_jobs
+          SET status = 'completed',
+              result = ?,
+              error = NULL,
+              finished_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+        [JSON.stringify(result), toSqlDateTime(completedAt), toSqlDateTime(completedAt), jobId]
+      );
+
+      return this.getStrategyJob(jobId);
+    });
+  }
+
+  async rescheduleStrategyJob(jobId: string, errorMessage: string, nextRunAt: string): Promise<StrategyJob | null> {
+    return this.withDatabaseConnection(async (conn) => {
+      const updatedAt = new Date().toISOString();
+      await conn.query(
+        `
+          UPDATE strategy_jobs
+          SET status = 'pending',
+              error = ?,
+              next_run_at = ?,
+              started_at = NULL,
+              finished_at = NULL,
+              updated_at = ?
+          WHERE id = ?
+        `,
+        [errorMessage, toSqlDateTime(nextRunAt), toSqlDateTime(updatedAt), jobId]
+      );
+
+      return this.getStrategyJob(jobId);
+    });
+  }
+
+  async failStrategyJob(jobId: string, errorMessage: string): Promise<StrategyJob | null> {
+    return this.withDatabaseConnection(async (conn) => {
+      const finishedAt = new Date().toISOString();
+      await conn.query(
+        `
+          UPDATE strategy_jobs
+          SET status = 'failed',
+              error = ?,
+              finished_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+        [errorMessage, toSqlDateTime(finishedAt), toSqlDateTime(finishedAt), jobId]
+      );
+
+      return this.getStrategyJob(jobId);
+    });
+  }
+
+  async recoverInterruptedStrategyJobs(): Promise<number> {
+    return this.withDatabaseConnection(async (conn) => {
+      const recoveryTime = new Date().toISOString();
+      const [result] = await conn.query<ResultSetHeader>(
+        `
+          UPDATE strategy_jobs
+          SET status = 'pending',
+              next_run_at = ?,
+              started_at = NULL,
+              finished_at = NULL,
+              error = CASE
+                WHEN error IS NULL OR error = '' THEN 'Interrupted by process restart.'
+                ELSE CONCAT(error, ' | Interrupted by process restart.')
+              END,
+              updated_at = ?
+          WHERE status = 'running'
+        `,
+        [toSqlDateTime(recoveryTime), toSqlDateTime(recoveryTime)]
+      );
+
+      return result.affectedRows;
+    });
+  }
+
+  async createAlert(input: {
+    type: StrategyAlertType;
+    severity: StrategyAlert["severity"];
+    message: string;
+    payload?: Record<string, unknown>;
+  }): Promise<StrategyAlert> {
+    const alert = normalizeStrategyAlert({
+      id: randomUUID(),
+      type: input.type,
+      severity: input.severity,
+      message: input.message,
+      payload: input.payload,
+      createdAt: new Date().toISOString(),
+    });
+
+    if (!alert) {
+      throw new Error("Invalid alert payload.");
+    }
+
+    return this.withDatabaseConnection(async (conn) => {
+      await conn.query(
+        `
+          INSERT INTO strategy_alerts (id, type, severity, message, payload, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        [
+          alert.id,
+          alert.type,
+          alert.severity,
+          alert.message,
+          alert.payload ? JSON.stringify(alert.payload) : null,
+          toSqlDateTime(alert.createdAt),
+        ]
+      );
+
+      return alert;
+    });
+  }
+
+  async listAlerts(limit = 50): Promise<StrategyAlert[]> {
+    return this.withDatabaseConnection(async (conn) => {
+      const [rows] = await conn.query<StrategyAlertRow[]>(
+        `
+          SELECT id, type, severity, message, payload, created_at
+          FROM strategy_alerts
+          ORDER BY created_at DESC
+          LIMIT ?
+        `,
+        [Math.max(1, Math.min(limit, 100))]
+      );
+
+      return rows
+        .map((row) =>
+          normalizeStrategyAlert({
+            id: row.id,
+            type: row.type,
+            severity: row.severity,
+            message: row.message,
+            payload: parseJsonField<Record<string, unknown> | undefined>(row.payload, undefined),
+            createdAt: fromSqlDateTime(row.created_at),
+          })
+        )
+        .filter((entry): entry is StrategyAlert => entry !== null);
+    });
   }
 }

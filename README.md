@@ -87,3 +87,17 @@ Endpoints after startup:
 - Backend health: `http://<PI_HOST_OR_IP>:3001/api/health`
 - n8n: `http://<PI_HOST_OR_IP>:5678` when the `automation` profile is enabled
 
+### Pi-safe strategy defaults
+
+The backend now persists historical candles in MySQL and runs backtests/evaluations through a MySQL-backed job table claimed by the existing in-process scheduler. The Pi compose env exposes the main tunables:
+
+- `HISTORICAL_CANDLE_RETENTION_DAYS`
+- `HISTORICAL_CANDLE_REQUEST_DELAY_MS`
+- `HISTORICAL_CANDLE_MAX_RETRIES`
+- `HISTORICAL_CANDLE_FETCH_LIMIT`
+- `HISTORICAL_CANDLE_RETRY_BASE_DELAY_MS`
+- `STRATEGY_JOB_RETRY_BASE_DELAY_MS`
+- `STRATEGY_JOB_MAX_ATTEMPTS`
+
+The defaults are intentionally conservative for Raspberry Pi 3B+: one scheduler path, low request pacing, bounded retention, and small retry counts.
+

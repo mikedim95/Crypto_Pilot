@@ -1,4 +1,5 @@
 import { StrategyRepository } from "./strategy-repository.js";
+import { StrategyJobService } from "./strategy-job-service.js";
 import { StrategyRunner } from "./strategy-runner.js";
 
 export class StrategyScheduler {
@@ -8,6 +9,7 @@ export class StrategyScheduler {
   constructor(
     private readonly repository: StrategyRepository,
     private readonly runner: StrategyRunner,
+    private readonly jobService: StrategyJobService,
     private readonly pollIntervalMs = 15_000
   ) {}
 
@@ -75,6 +77,15 @@ export class StrategyScheduler {
             );
           }
         }
+      }
+
+      try {
+        await this.jobService.processDueJobs(1);
+      } catch (error) {
+        console.error(
+          "[strategy-scheduler] strategy job processing failed:",
+          error instanceof Error ? error.message : error
+        );
       }
     } finally {
       this.runningTick = false;

@@ -403,6 +403,12 @@ export type PortfolioAccountType = "real" | "demo";
 export type StrategyRunStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 export type BacktestRunStatus = "pending" | "running" | "completed" | "failed";
 export type StrategyApprovalState = "draft" | "testing" | "paper" | "approved" | "rejected";
+export type StrategyJobType =
+  | "sync_historical_candles"
+  | "run_backtest"
+  | "evaluate_strategy_candidate"
+  | "refresh_projected_outcome";
+export type StrategyJobStatus = "pending" | "running" | "completed" | "failed";
 
 export interface DemoAccountHolding {
   symbol: string;
@@ -827,6 +833,22 @@ export interface StrategyCandidateEvaluationSummary {
   notes: string[];
 }
 
+export interface StrategyJob {
+  id: string;
+  type: StrategyJobType;
+  status: StrategyJobStatus;
+  payload: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  attempts: number;
+  maxAttempts: number;
+  nextRunAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StrategyVersionRecord {
   id: string;
   strategyId: string;
@@ -864,7 +886,7 @@ export interface StrategyEvaluationsResponse {
 
 export interface StrategyEvaluationResponse {
   strategy: StrategyConfig;
-  evaluation: StrategyCandidateEvaluationSummary;
+  job: StrategyJob;
 }
 
 export interface StrategyRunsResponse {
@@ -899,8 +921,15 @@ export interface BacktestResponse {
 }
 
 export interface CreateBacktestResponse {
-  backtestRun: BacktestRun;
-  steps: number;
+  job: StrategyJob;
+}
+
+export interface StrategyJobsResponse {
+  jobs: StrategyJob[];
+}
+
+export interface StrategyJobResponse {
+  job: StrategyJob;
 }
 
 export interface BacktestTimelineResponse {
@@ -952,4 +981,11 @@ export interface StrategyCandidateEvaluationRequest {
   validationDays?: number;
   rebalanceCostsPct: number;
   slippagePct: number;
+}
+
+export interface HistoricalCandleSyncRequest {
+  symbol: string;
+  interval: "1h" | "1d";
+  startTime: string;
+  endTime: string;
 }

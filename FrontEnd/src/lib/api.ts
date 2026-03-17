@@ -17,6 +17,7 @@ import type {
   ExecutionPlanResponse,
   FleetLiveResponse,
   FleetOverviewResponse,
+  HistoricalCandleSyncRequest,
   MiningOverviewResponse,
   MinerCommandResponse,
   MinerDetailResponse,
@@ -42,6 +43,8 @@ import type {
   StrategyCandidateEvaluationRequest,
   StrategyEvaluationResponse,
   StrategyEvaluationsResponse,
+  StrategyJobResponse,
+  StrategyJobsResponse,
   StrategyRunResponse,
   StrategyRunsResponse,
   StrategyStateResponse,
@@ -379,9 +382,29 @@ export const backendApi = {
   getStrategyRuns: (accountType: PortfolioAccountType = "real") =>
     apiRequest<StrategyRunsResponse>(withQuery("/api/strategy-runs", { accountType })),
   getStrategyRun: (runId: string) => apiRequest<StrategyRunResponse>(`/api/strategy-runs/${runId}`),
+  getStrategyJobs: (query?: {
+    strategyId?: string;
+    type?: string;
+    status?: string;
+    limit?: number;
+  }) =>
+    apiRequest<StrategyJobsResponse>(
+      withQuery("/api/strategy-jobs", {
+        strategyId: query?.strategyId,
+        type: query?.type,
+        status: query?.status,
+        limit: typeof query?.limit === "number" ? String(query.limit) : undefined,
+      })
+    ),
+  getStrategyJob: (jobId: string) => apiRequest<StrategyJobResponse>(`/api/strategy-jobs/${jobId}`),
 
   createBacktest: (body: BacktestCreateRequest) =>
     apiRequest<CreateBacktestResponse>("/api/backtests", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  syncHistoricalCandles: (body: HistoricalCandleSyncRequest) =>
+    apiRequest<StrategyJobResponse>("/api/historical-candles/sync", {
       method: "POST",
       body: JSON.stringify(body),
     }),
