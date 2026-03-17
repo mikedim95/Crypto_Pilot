@@ -1,189 +1,104 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, Lock } from "lucide-react";
-import { SpinnerValue } from "@/components/SpinnerValue";
-import { useDashboardData, useTradingPairPreview } from "@/hooks/useTradingData";
-import { cn } from "@/lib/utils";
-import type { PortfolioAccountType } from "@/types/api";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "@/components/ui/sonner";
+import { TradeComposerPanel } from "@/components/trading/TradeComposerPanel";
+import { TradingContextPanel } from "@/components/trading/TradingContextPanel";
+import { TradingPreviewPanel } from "@/components/trading/TradingPreviewPanel";
+import {
+  COMMON_SYMBOL_SUGGESTIONS,
+  QUOTE_PRIORITY,
+  STABLE_SYMBOLS,
+  buildEmptyAvailability,
+  normalizeSymbolInput,
+  pickAlternateSymbol,
+} from "@/components/trading/trading-utils";
+import { useDashboardData, useTradingAssets, useTradingPairPreview } from "@/hooks/useTradingData";
+import { backendApi } from "@/lib/api";
+import type { PortfolioAccountType, TradeExecutionResponse, TradePreviewResponse, TradingAmountMode, TradingTransactionRequest } from "@/types/api";
 
 interface TradingPageProps {
   accountType: PortfolioAccountType;
 }
 
-type TradeSide = "Buy" | "Sell";
-type TradeAmountMode = "base" | "quote" | "usd";
-
-const COMMON_SYMBOL_SUGGESTIONS = [
-  "BTC",
-  "ETH",
-  "BNB",
-  "SOL",
-  "XRP",
-  "ADA",
-  "DOGE",
-  "AVAX",
-  "LINK",
-  "LTC",
-  "BCH",
-  "ETC",
-  "UNI",
-  "AAVE",
-  "INJ",
-  "NEAR",
-  "HBAR",
-  "SUI",
-  "TON",
-  "SHIB",
-  "PEPE",
-  "APT",
-  "ARB",
-  "OP",
-  "SEI",
-  "RUNE",
-  "MATIC",
-  "XLM",
-  "ALGO",
-  "TRX",
-  "DOT",
-  "ATOM",
-  "USDT",
-  "USDC",
-  "FDUSD",
-];
-
-const QUOTE_PRIORITY = ["USDT", "USDC", "FDUSD", "BTC", "ETH", "BNB"];
-const STABLE_SYMBOLS = new Set(["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI"]);
-
-function normalizeSymbolInput(value: string): string {
-  return value.trim().toUpperCase();
-}
-
-function formatUsd(value: number): string {
-  return value.toLocaleString("en-US", { style: "currency", currency: "USD" });
-}
-
-function formatAssetAmount(value: number, symbol: string): string {
-  return `${value.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${symbol}`;
-}
-
-function formatPairPrice(value: number): string {
-  if (!Number.isFinite(value)) return "--";
-
-  if (value >= 1000) {
-    return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  }
-
-  if (value >= 1) {
-    return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
-  }
-
-  return value.toLocaleString(undefined, { maximumFractionDigits: 8 });
-}
-
-function pricingSourceLabel(source: "direct" | "inverse" | "usd_cross" | undefined): string {
-  if (source === "direct") return "Direct market";
-  if (source === "inverse") return "Reverse market";
-  if (source === "usd_cross") return "USD cross";
-  return "--";
-}
-
-function pickAlternateSymbol(
-  currentSymbol: string,
-  excludedSymbol: string,
-  orderedOptions: string[],
-  fallback = "USDT"
-): string {
-  return orderedOptions.find((symbol) => symbol !== currentSymbol && symbol !== excludedSymbol) ?? fallback;
+interface LocalPreview {
+  buyAmount: number;
+  sellAmount: number;
+  buyWorthUsdt: number;
 }
 
 export function TradingPage({ accountType }: TradingPageProps) {
-  const { data, isPending, error } = useDashboardData(accountType);
-  const isLoading = isPending && !data;
+  const queryClient = useQueryClient();
+  const { data: dashboardData, isPending: dashboardPending, error: dashboardError } = useDashboardData(accountType);
+  const { data: tradingAssetsData, isPending: tradingAssetsPending, error: tradingAssetsError } = useTradingAssets(accountType);
 
-  const [side, setSide] = useState<TradeSide>("Buy");
-  const [baseSymbolInput, setBaseSymbolInput] = useState("");
-  const [quoteSymbolInput, setQuoteSymbolInput] = useState("");
-  const [amountMode, setAmountMode] = useState<TradeAmountMode>("base");
+  const [buyingAssetInput, setBuyingAssetInput] = useState("");
+  const [sellingAssetInput, setSellingAssetInput] = useState("");
+  const [amountMode, setAmountMode] = useState<TradingAmountMode>("selling_asset");
   const [amountInput, setAmountInput] = useState("");
+  const [serverPreview, setServerPreview] = useState<TradePreviewResponse | null>(null);
+  const [executionResult, setExecutionResult] = useState<TradeExecutionResponse | null>(null);
 
-  const assets = data?.assets ?? [];
-
-  const symbolSuggestions = useMemo(() => {
-    return Array.from(new Set([...COMMON_SYMBOL_SUGGESTIONS, ...assets.map((asset) => asset.symbol.toUpperCase())])).sort((left, right) =>
-      left.localeCompare(right)
-    );
-  }, [assets]);
-
-  const normalizedBaseSymbol = useMemo(() => normalizeSymbolInput(baseSymbolInput), [baseSymbolInput]);
-  const normalizedQuoteSymbol = useMemo(() => normalizeSymbolInput(quoteSymbolInput), [quoteSymbolInput]);
-  const deferredBaseSymbol = useDeferredValue(normalizedBaseSymbol);
-  const deferredQuoteSymbol = useDeferredValue(normalizedQuoteSymbol);
-
-  const baseOptions = useMemo(
-    () => symbolSuggestions.filter((symbol) => symbol !== normalizedQuoteSymbol || symbol === normalizedBaseSymbol),
-    [normalizedBaseSymbol, normalizedQuoteSymbol, symbolSuggestions]
+  const assetAvailabilities = useMemo(() => tradingAssetsData?.assets ?? [], [tradingAssetsData?.assets]);
+  const symbolSuggestions = useMemo(
+    () => Array.from(new Set([...COMMON_SYMBOL_SUGGESTIONS, ...assetAvailabilities.map((asset) => asset.symbol)])).sort((a, b) => a.localeCompare(b)),
+    [assetAvailabilities]
   );
 
-  const quoteOptions = useMemo(
-    () => symbolSuggestions.filter((symbol) => symbol !== normalizedBaseSymbol || symbol === normalizedQuoteSymbol),
-    [normalizedBaseSymbol, normalizedQuoteSymbol, symbolSuggestions]
+  const normalizedBuyingAsset = useMemo(() => normalizeSymbolInput(buyingAssetInput), [buyingAssetInput]);
+  const normalizedSellingAsset = useMemo(() => normalizeSymbolInput(sellingAssetInput), [sellingAssetInput]);
+  const deferredBuyingAsset = useDeferredValue(normalizedBuyingAsset);
+  const deferredSellingAsset = useDeferredValue(normalizedSellingAsset);
+
+  const buyingOptions = useMemo(
+    () => symbolSuggestions.filter((symbol) => symbol !== normalizedSellingAsset || symbol === normalizedBuyingAsset),
+    [normalizedBuyingAsset, normalizedSellingAsset, symbolSuggestions]
+  );
+  const sellingOptions = useMemo(
+    () => symbolSuggestions.filter((symbol) => symbol !== normalizedBuyingAsset || symbol === normalizedSellingAsset),
+    [normalizedBuyingAsset, normalizedSellingAsset, symbolSuggestions]
   );
 
   useEffect(() => {
-    if (baseSymbolInput) {
-      return;
-    }
-
-    const preferredBase =
-      assets.find((asset) => !STABLE_SYMBOLS.has(asset.symbol.toUpperCase()))?.symbol ??
+    if (buyingAssetInput) return;
+    const preferredBuying =
+      assetAvailabilities.find((asset) => !STABLE_SYMBOLS.has(asset.symbol))?.symbol ??
       symbolSuggestions.find((symbol) => !STABLE_SYMBOLS.has(symbol)) ??
       "BTC";
-    setBaseSymbolInput(preferredBase);
-  }, [assets, baseSymbolInput, symbolSuggestions]);
+    setBuyingAssetInput(preferredBuying);
+  }, [assetAvailabilities, buyingAssetInput, symbolSuggestions]);
 
   useEffect(() => {
-    if (quoteSymbolInput) {
-      return;
-    }
-
-    const normalizedBase = normalizeSymbolInput(baseSymbolInput);
-    const preferredQuote = [...QUOTE_PRIORITY, ...symbolSuggestions].find((symbol) => symbol !== normalizedBase) ?? "USDT";
-    setQuoteSymbolInput(preferredQuote);
-  }, [baseSymbolInput, quoteSymbolInput, symbolSuggestions]);
+    if (sellingAssetInput) return;
+    const preferredSelling =
+      assetAvailabilities.find((asset) => STABLE_SYMBOLS.has(asset.symbol) && asset.freeAmount > 0 && asset.symbol !== normalizedBuyingAsset)?.symbol ??
+      assetAvailabilities.find((asset) => asset.freeAmount > 0 && asset.symbol !== normalizedBuyingAsset)?.symbol ??
+      [...QUOTE_PRIORITY, ...symbolSuggestions].find((symbol) => symbol !== normalizedBuyingAsset) ??
+      "USDT";
+    setSellingAssetInput(preferredSelling);
+  }, [assetAvailabilities, normalizedBuyingAsset, sellingAssetInput, symbolSuggestions]);
 
   useEffect(() => {
-    if (!normalizedBaseSymbol || !normalizedQuoteSymbol || normalizedBaseSymbol !== normalizedQuoteSymbol) {
-      return;
-    }
+    if (!normalizedBuyingAsset || !normalizedSellingAsset || normalizedBuyingAsset !== normalizedSellingAsset) return;
+    setSellingAssetInput(pickAlternateSymbol(normalizedSellingAsset, normalizedBuyingAsset, [...QUOTE_PRIORITY, ...symbolSuggestions]));
+  }, [normalizedBuyingAsset, normalizedSellingAsset, symbolSuggestions]);
 
-    const nextQuote = pickAlternateSymbol(normalizedQuoteSymbol, normalizedBaseSymbol, [...QUOTE_PRIORITY, ...symbolSuggestions]);
-    if (nextQuote !== normalizedQuoteSymbol) {
-      setQuoteSymbolInput(nextQuote);
-    }
-  }, [normalizedBaseSymbol, normalizedQuoteSymbol, symbolSuggestions]);
+  useEffect(() => {
+    setServerPreview(null);
+    setExecutionResult(null);
+  }, [accountType, normalizedBuyingAsset, normalizedSellingAsset, amountMode, amountInput]);
 
   const invalidPairMessage = useMemo(() => {
-    if (!normalizedBaseSymbol || !normalizedQuoteSymbol) {
-      return "Enter both assets to preview a pair.";
-    }
-
-    if (!/^[A-Z0-9_-]{2,20}$/.test(normalizedBaseSymbol) || !/^[A-Z0-9_-]{2,20}$/.test(normalizedQuoteSymbol)) {
+    if (!normalizedBuyingAsset || !normalizedSellingAsset) return "Choose both a buying asset and a selling asset.";
+    if (!/^[A-Z0-9_-]{2,20}$/.test(normalizedBuyingAsset) || !/^[A-Z0-9_-]{2,20}$/.test(normalizedSellingAsset)) {
       return "Asset symbols must use 2-20 letters, numbers, underscores, or dashes.";
     }
-
-    if (normalizedBaseSymbol === normalizedQuoteSymbol) {
-      return "Base and quote assets must be different.";
-    }
-
+    if (normalizedBuyingAsset === normalizedSellingAsset) return "Buying asset and selling asset must be different.";
     return null;
-  }, [normalizedBaseSymbol, normalizedQuoteSymbol]);
+  }, [normalizedBuyingAsset, normalizedSellingAsset]);
 
-  const {
-    data: pairPreviewData,
-    isPending: loadingPairPreview,
-    error: pairPreviewError,
-  } = useTradingPairPreview(
-    deferredBaseSymbol || undefined,
-    deferredQuoteSymbol || undefined,
+  const { data: pairPreviewData, isPending: loadingPairPreview, error: pairPreviewError } = useTradingPairPreview(
+    deferredBuyingAsset || undefined,
+    deferredSellingAsset || undefined,
     accountType
   );
 
@@ -193,400 +108,197 @@ export function TradingPage({ accountType }: TradingPageProps) {
 
   const amountModeButtons = useMemo(
     () => [
-      { id: "base" as const, label: normalizedBaseSymbol || "Base Asset" },
-      { id: "quote" as const, label: normalizedQuoteSymbol || "Quote Asset" },
-      { id: "usd" as const, label: "USD" },
+      { id: "selling_asset" as const, label: normalizedSellingAsset || "Selling asset" },
+      { id: "buying_asset" as const, label: normalizedBuyingAsset || "Buying asset" },
+      { id: "buying_asset_usdt" as const, label: "Buy worth in USDT" },
     ],
-    [normalizedBaseSymbol, normalizedQuoteSymbol]
+    [normalizedBuyingAsset, normalizedSellingAsset]
   );
 
-  const preview = useMemo(() => {
-    if (!pair || !hasValidAmount || pair.basePriceUsd <= 0 || pair.quotePriceUsd <= 0 || pair.priceInQuote <= 0) {
-      return null;
+  const localPreview = useMemo<LocalPreview | null>(() => {
+    if (!pair || !hasValidAmount || pair.basePriceUsd <= 0 || pair.quotePriceUsd <= 0 || pair.priceInQuote <= 0) return null;
+    if (amountMode === "selling_asset") {
+      const sellAmount = parsedAmount;
+      const buyAmount = sellAmount / pair.priceInQuote;
+      return { sellAmount, buyAmount, buyWorthUsdt: buyAmount * pair.basePriceUsd };
     }
-
-    let baseAmount = 0;
-    let quoteAmount = 0;
-    let usdAmount = 0;
-
-    if (amountMode === "base") {
-      baseAmount = parsedAmount;
-      quoteAmount = baseAmount * pair.priceInQuote;
-      usdAmount = baseAmount * pair.basePriceUsd;
-    } else if (amountMode === "quote") {
-      quoteAmount = parsedAmount;
-      baseAmount = quoteAmount / pair.priceInQuote;
-      usdAmount = quoteAmount * pair.quotePriceUsd;
-    } else {
-      usdAmount = parsedAmount;
-      baseAmount = usdAmount / pair.basePriceUsd;
-      quoteAmount = usdAmount / pair.quotePriceUsd;
+    if (amountMode === "buying_asset") {
+      const buyAmount = parsedAmount;
+      const sellAmount = buyAmount * pair.priceInQuote;
+      return { sellAmount, buyAmount, buyWorthUsdt: buyAmount * pair.basePriceUsd };
     }
-
-    return {
-      baseAmount,
-      quoteAmount,
-      usdAmount,
-    };
+    const buyWorthUsdt = parsedAmount;
+    const buyAmount = buyWorthUsdt / pair.basePriceUsd;
+    return { sellAmount: buyAmount * pair.priceInQuote, buyAmount, buyWorthUsdt };
   }, [amountMode, hasValidAmount, pair, parsedAmount]);
 
-  const balanceRequirement = useMemo(() => {
-    if (!pair || !preview) {
-      return null;
-    }
+  const buyingAvailability = useMemo(() => {
+    if (!normalizedBuyingAsset) return null;
+    return (
+      assetAvailabilities.find((asset) => asset.symbol === normalizedBuyingAsset) ??
+      (pair && pair.baseSymbol === normalizedBuyingAsset
+        ? {
+            symbol: normalizedBuyingAsset,
+            name: pair.baseName,
+            totalAmount: pair.baseBalance,
+            reservedAmount: pair.baseReservedBalance,
+            freeAmount: pair.baseFreeBalance,
+            lockedAmount: pair.baseLockedBalance,
+            priceUsd: pair.basePriceUsd,
+            totalValueUsd: pair.baseBalance * pair.basePriceUsd,
+            reservedValueUsd: pair.baseReservedBalance * pair.basePriceUsd,
+            freeValueUsd: pair.baseFreeBalance * pair.basePriceUsd,
+          }
+        : buildEmptyAvailability(normalizedBuyingAsset))
+    );
+  }, [assetAvailabilities, normalizedBuyingAsset, pair]);
 
-    if (side === "Buy") {
-      return {
-        label: `Required ${pair.quoteSymbol}`,
-        required: preview.quoteAmount,
-        available: pair.quoteBalance,
-        symbol: pair.quoteSymbol,
-      };
-    }
+  const sellingAvailability = useMemo(() => {
+    if (!normalizedSellingAsset) return null;
+    return (
+      assetAvailabilities.find((asset) => asset.symbol === normalizedSellingAsset) ??
+      (pair && pair.quoteSymbol === normalizedSellingAsset
+        ? {
+            symbol: normalizedSellingAsset,
+            name: pair.quoteName,
+            totalAmount: pair.quoteBalance,
+            reservedAmount: pair.quoteReservedBalance,
+            freeAmount: pair.quoteFreeBalance,
+            lockedAmount: pair.quoteLockedBalance,
+            priceUsd: pair.quotePriceUsd,
+            totalValueUsd: pair.quoteBalance * pair.quotePriceUsd,
+            reservedValueUsd: pair.quoteReservedBalance * pair.quotePriceUsd,
+            freeValueUsd: pair.quoteFreeBalance * pair.quotePriceUsd,
+          }
+        : buildEmptyAvailability(normalizedSellingAsset))
+    );
+  }, [assetAvailabilities, normalizedSellingAsset, pair]);
 
+  const insufficientFreeBalance = Boolean(localPreview && sellingAvailability && localPreview.sellAmount > sellingAvailability.freeAmount + 0.00000001);
+  const localBalanceMessage =
+    localPreview && sellingAvailability && insufficientFreeBalance
+      ? `Requires ${localPreview.sellAmount.toFixed(8)} ${sellingAvailability.symbol} but only ${sellingAvailability.freeAmount.toFixed(8)} is free outside rebalance allocations.`
+      : null;
+
+  const previewPayload = useMemo<TradingTransactionRequest | null>(() => {
+    if (!normalizedBuyingAsset || !normalizedSellingAsset || !hasValidAmount) return null;
     return {
-      label: `Required ${pair.baseSymbol}`,
-      required: preview.baseAmount,
-      available: pair.baseBalance,
-      symbol: pair.baseSymbol,
+      accountType,
+      buyingAsset: normalizedBuyingAsset,
+      sellingAsset: normalizedSellingAsset,
+      amountMode,
+      amount: parsedAmount,
     };
-  }, [pair, preview, side]);
+  }, [accountType, amountMode, hasValidAmount, normalizedBuyingAsset, normalizedSellingAsset, parsedAmount]);
 
-  const insufficientBalance =
-    balanceRequirement !== null && balanceRequirement.required > balanceRequirement.available + 0.00000001;
+  const previewMutation = useMutation({
+    mutationFn: (payload: TradingTransactionRequest) => backendApi.previewTrade(payload),
+    onSuccess: (response) => {
+      setServerPreview(response);
+      setExecutionResult(null);
+    },
+  });
 
-  const spendBalanceLabel = side === "Buy" ? `Available ${pair?.quoteSymbol ?? "quote"}` : `Available ${pair?.baseSymbol ?? "base"}`;
-  const orderPreviewDisabled = isLoading || Boolean(invalidPairMessage) || !pair || !preview;
+  const executeMutation = useMutation({
+    mutationFn: (payload: TradingTransactionRequest) => backendApi.executeTrade(payload),
+    onSuccess: (response) => {
+      setExecutionResult(response);
+      setServerPreview(response.preview);
+      toast.success(response.execution.message);
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard", accountType] }),
+        queryClient.invalidateQueries({ queryKey: ["trading-assets", accountType] }),
+        queryClient.invalidateQueries({ queryKey: ["trading-pair-preview", normalizedBuyingAsset, normalizedSellingAsset, accountType] }),
+        queryClient.invalidateQueries({ queryKey: ["orders"] }),
+        queryClient.invalidateQueries({ queryKey: ["decision-intelligence", accountType] }),
+        queryClient.invalidateQueries({ queryKey: ["demo-account-settings"] }),
+      ]);
+    },
+  });
+
+  const previewResponse = executionResult?.preview ?? serverPreview;
+  const previewDisabled = Boolean(invalidPairMessage) || !previewPayload || !localPreview || previewMutation.isPending || executeMutation.isPending;
+  const executeDisabled = previewDisabled || pair?.executable === false || insufficientFreeBalance;
 
   return (
     <div className="p-4 md:p-6 space-y-4">
       <div>
         <h2 className="text-lg md:text-xl font-mono font-semibold text-foreground">Trading</h2>
-        <p className="text-sm text-muted-foreground mt-1">Flexible pair preview for spot trades across base, quote, or USD sizing.</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          Choose the asset you are buying, the asset you are selling, and size the conversion from the sell side, buy side, or buy-side USDT worth.
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 rounded-lg border border-border bg-card p-5 space-y-4 animate-fade-up">
-          <div className="flex gap-2">
-            {(["Buy", "Sell"] as const).map((nextSide) => (
-              <button
-                key={nextSide}
-                onClick={() => setSide(nextSide)}
-                className={cn(
-                  "flex-1 rounded-md border px-3 py-2.5 text-sm font-mono uppercase tracking-wider transition-colors",
-                  side === nextSide
-                    ? nextSide === "Buy"
-                      ? "border-positive bg-positive/10 text-positive"
-                      : "border-negative bg-negative/10 text-negative"
-                    : "border-border text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {nextSide}
-              </button>
-            ))}
-          </div>
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)] gap-4">
+        <TradeComposerPanel
+          buyingAssetInput={buyingAssetInput}
+          sellingAssetInput={sellingAssetInput}
+          buyingOptions={buyingOptions}
+          sellingOptions={sellingOptions}
+          assetAvailabilities={assetAvailabilities}
+          normalizedBuyingAsset={normalizedBuyingAsset}
+          normalizedSellingAsset={normalizedSellingAsset}
+          amountMode={amountMode}
+          amountModeButtons={amountModeButtons}
+          amountInput={amountInput}
+          pair={pair}
+          localPreview={localPreview}
+          loadingPairPreview={loadingPairPreview}
+          invalidPairMessage={invalidPairMessage}
+          pairErrorMessage={pairPreviewError instanceof Error ? pairPreviewError.message : null}
+          tradingAssetsErrorMessage={tradingAssetsError instanceof Error ? tradingAssetsError.message : null}
+          localBalanceMessage={localBalanceMessage}
+          insufficientFreeBalance={insufficientFreeBalance}
+          previewDisabled={previewDisabled}
+          executeDisabled={executeDisabled}
+          previewPending={previewMutation.isPending}
+          executePending={executeMutation.isPending}
+          onBuyingAssetChange={(nextBuying) => {
+            setBuyingAssetInput(nextBuying);
+            if (nextBuying === normalizedSellingAsset) {
+              setSellingAssetInput(pickAlternateSymbol(normalizedSellingAsset, nextBuying, [...QUOTE_PRIORITY, ...symbolSuggestions]));
+            }
+          }}
+          onSellingAssetChange={(nextSelling) => {
+            setSellingAssetInput(nextSelling);
+            if (nextSelling === normalizedBuyingAsset) {
+              setBuyingAssetInput(pickAlternateSymbol(normalizedBuyingAsset, nextSelling, symbolSuggestions, "BTC"));
+            }
+          }}
+          onSwapAssets={() => {
+            if (!normalizedBuyingAsset || !normalizedSellingAsset) return;
+            setBuyingAssetInput(normalizedSellingAsset);
+            setSellingAssetInput(normalizedBuyingAsset);
+          }}
+          onAmountModeChange={setAmountMode}
+          onAmountInputChange={setAmountInput}
+          onPreview={() => previewPayload && previewMutation.mutate(previewPayload)}
+          onExecute={() => previewPayload && executeMutation.mutate(previewPayload)}
+        />
 
-          <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-3 items-end">
-            <div>
-              <label className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Base Asset</label>
-              <select
-                value={baseSymbolInput}
-                onChange={(event) => {
-                  const nextBase = event.target.value;
-                  setBaseSymbolInput(nextBase);
-                  if (nextBase === normalizedQuoteSymbol) {
-                    setQuoteSymbolInput(pickAlternateSymbol(normalizedQuoteSymbol, nextBase, [...QUOTE_PRIORITY, ...symbolSuggestions]));
-                  }
-                }}
-                className="mt-1 w-full rounded-md border border-border bg-secondary px-3 py-3 text-sm font-mono uppercase text-foreground outline-none"
-              >
-                {baseOptions.map((symbol) => (
-                  <option key={symbol} value={symbol}>
-                    {symbol}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                if (!normalizedBaseSymbol || !normalizedQuoteSymbol) {
-                  return;
-                }
-                setBaseSymbolInput(normalizedQuoteSymbol);
-                setQuoteSymbolInput(normalizedBaseSymbol);
-              }}
-              className="h-11 w-11 rounded-md border border-border bg-secondary text-muted-foreground transition-colors hover:text-foreground"
-              aria-label="Swap base and quote assets"
-            >
-              <ArrowRightLeft className="mx-auto h-4 w-4" />
-            </button>
-
-            <div>
-              <label className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Quote Asset</label>
-              <select
-                value={quoteSymbolInput}
-                onChange={(event) => {
-                  const nextQuote = event.target.value;
-                  setQuoteSymbolInput(nextQuote);
-                  if (nextQuote === normalizedBaseSymbol) {
-                    setBaseSymbolInput(pickAlternateSymbol(normalizedBaseSymbol, nextQuote, symbolSuggestions, "BTC"));
-                  }
-                }}
-                className="mt-1 w-full rounded-md border border-border bg-secondary px-3 py-3 text-sm font-mono uppercase text-foreground outline-none"
-              >
-                {quoteOptions.map((symbol) => (
-                  <option key={symbol} value={symbol}>
-                    {symbol}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Amount Mode</label>
-            <div className="mt-1 grid grid-cols-3 gap-2">
-              {amountModeButtons.map((mode) => (
-                <button
-                  key={mode.id}
-                  type="button"
-                  onClick={() => setAmountMode(mode.id)}
-                  className={cn(
-                    "rounded-md border px-3 py-2.5 text-sm font-mono uppercase tracking-wider transition-colors",
-                    amountMode === mode.id
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
-                Amount ({amountMode === "usd" ? "USD" : amountMode === "base" ? normalizedBaseSymbol || "base" : normalizedQuoteSymbol || "quote"})
-              </label>
-              <input
-                value={amountInput}
-                onChange={(event) => setAmountInput(event.target.value)}
-                placeholder="0.00"
-                className="mt-1 w-full rounded-md border border-border bg-secondary px-3 py-3 text-sm font-mono text-foreground outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
-                Pair Price ({normalizedQuoteSymbol || "quote"} per {normalizedBaseSymbol || "base"})
-              </label>
-              <div className="mt-1 w-full rounded-md border border-border bg-secondary px-3 py-3 text-sm font-mono text-foreground">
-                <SpinnerValue
-                  loading={loadingPairPreview && !pair}
-                  value={pair ? `${formatPairPrice(pair.priceInQuote)} ${pair.quoteSymbol}` : undefined}
-                  placeholder="--"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="rounded-md border border-border bg-secondary/60 px-3 py-3">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Base Amount</div>
-              <div className="mt-2 text-sm font-mono text-foreground">
-                <SpinnerValue
-                  loading={loadingPairPreview && !preview}
-                  value={preview && pair ? formatAssetAmount(preview.baseAmount, pair.baseSymbol) : undefined}
-                  placeholder="--"
-                />
-              </div>
-            </div>
-            <div className="rounded-md border border-border bg-secondary/60 px-3 py-3">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Quote Amount</div>
-              <div className="mt-2 text-sm font-mono text-foreground">
-                <SpinnerValue
-                  loading={loadingPairPreview && !preview}
-                  value={preview && pair ? formatAssetAmount(preview.quoteAmount, pair.quoteSymbol) : undefined}
-                  placeholder="--"
-                />
-              </div>
-            </div>
-            <div className="rounded-md border border-border bg-secondary/60 px-3 py-3">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">USD Notional</div>
-              <div className="mt-2 text-sm font-mono text-foreground">
-                <SpinnerValue
-                  loading={loadingPairPreview && !preview}
-                  value={preview ? formatUsd(preview.usdAmount) : undefined}
-                  placeholder="--"
-                />
-              </div>
-            </div>
-          </div>
-
-          {invalidPairMessage ? (
-            <div className="rounded-md border border-negative/30 bg-negative/10 p-3 text-xs text-negative">{invalidPairMessage}</div>
-          ) : null}
-
-          {pairPreviewError ? (
-            <div className="rounded-md border border-negative/30 bg-negative/10 p-3 text-xs text-negative">
-              {pairPreviewError instanceof Error ? pairPreviewError.message : "Unable to load pair preview."}
-            </div>
-          ) : null}
-
-          {balanceRequirement ? (
-            <div
-              className={cn(
-                "rounded-md border p-3 text-xs font-mono",
-                insufficientBalance
-                  ? "border-negative/30 bg-negative/10 text-negative"
-                  : "border-border bg-secondary/50 text-muted-foreground"
-              )}
-            >
-              {balanceRequirement.label}: {formatAssetAmount(balanceRequirement.required, balanceRequirement.symbol)}.
-              Available: {formatAssetAmount(balanceRequirement.available, balanceRequirement.symbol)}.
-            </div>
-          ) : null}
-
-          <button
-            disabled={orderPreviewDisabled}
-            className="w-full rounded-md bg-primary px-4 py-3.5 text-sm font-mono font-semibold uppercase tracking-wider text-primary-foreground transition-opacity disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Preview {side} {normalizedBaseSymbol || "base"}/{normalizedQuoteSymbol || "quote"}
-          </button>
-
-          <p className="text-xs text-muted-foreground">
-            Preview only. Live execution, order routing, and advanced order types are still inactive.
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-border bg-card p-5 space-y-4 animate-fade-up" style={{ animationDelay: "120ms" }}>
-          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Pair Overview</div>
-          <div className="space-y-3 text-sm font-mono">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Connection</span>
-              <SpinnerValue
-                loading={isLoading}
-                value={
-                  data
-                    ? data.connection.connected
-                      ? data.connection.testnet
-                        ? "Testnet"
-                        : "Live"
-                      : accountType === "demo"
-                        ? "Demo"
-                        : "Offline"
-                    : undefined
-                }
-                className={data?.connection.connected || accountType === "demo" ? "text-positive" : "text-muted-foreground"}
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Pair</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? `${pair.baseSymbol}/${pair.quoteSymbol}` : undefined}
-                className="text-foreground"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Pricing</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? pricingSourceLabel(pair.pricingSource) : undefined}
-                className="text-foreground"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">{pair?.baseSymbol ?? "Base"} 24h</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? `${pair.baseChange24h >= 0 ? "+" : ""}${pair.baseChange24h}%` : undefined}
-                className={cn(pair && pair.baseChange24h < 0 ? "text-negative" : "text-positive")}
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">{pair?.quoteSymbol ?? "Quote"} 24h</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? `${pair.quoteChange24h >= 0 ? "+" : ""}${pair.quoteChange24h}%` : undefined}
-                className={cn(pair && pair.quoteChange24h < 0 ? "text-negative" : "text-positive")}
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">{pair?.baseSymbol ?? "Base"} Balance</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? formatAssetAmount(pair.baseBalance, pair.baseSymbol) : undefined}
-                className="text-foreground"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">{pair?.quoteSymbol ?? "Quote"} Balance</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? formatAssetAmount(pair.quoteBalance, pair.quoteSymbol) : undefined}
-                className="text-foreground"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">{spendBalanceLabel}</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={
-                  pair
-                    ? side === "Buy"
-                      ? formatAssetAmount(pair.quoteBalance, pair.quoteSymbol)
-                      : formatAssetAmount(pair.baseBalance, pair.baseSymbol)
-                    : undefined
-                }
-                className="text-foreground"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">{pair?.baseSymbol ?? "Base"} USD</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? formatUsd(pair.basePriceUsd) : undefined}
-                className="text-foreground"
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">{pair?.quoteSymbol ?? "Quote"} USD</span>
-              <SpinnerValue
-                loading={loadingPairPreview && !pair}
-                value={pair ? formatUsd(pair.quotePriceUsd) : undefined}
-                className="text-foreground"
-              />
-            </div>
-          </div>
-
-          {error && !data ? (
-            <div className="rounded-md border border-negative/30 bg-negative/10 p-3 text-xs text-negative">
-              {error instanceof Error ? error.message : "Failed to load trading data."}
-            </div>
-          ) : null}
-
-          <div className="rounded-md border border-border bg-secondary/50 p-3 text-xs text-muted-foreground">
-            <div className="inline-flex items-center gap-1 font-mono uppercase tracking-wider">
-              <Lock className="h-3.5 w-3.5" />
-              Advanced Trading
-            </div>
-            <div className="mt-1">Pair preview now supports arbitrary symbols. Execution, TP/SL, and routing are still coming later.</div>
-          </div>
-        </div>
+        <TradingContextPanel
+          connection={dashboardData?.connection}
+          accountType={accountType}
+          loadingConnection={dashboardPending && !dashboardData}
+          pair={pair}
+          loadingPairPreview={loadingPairPreview}
+          buyingAvailability={buyingAvailability}
+          sellingAvailability={sellingAvailability}
+          assetAvailabilities={assetAvailabilities}
+          assetsPending={tradingAssetsPending}
+          dashboardErrorMessage={dashboardError instanceof Error ? dashboardError.message : null}
+        />
       </div>
+
+      {(previewMutation.error || executeMutation.error) && !previewResponse ? (
+        <div className="rounded-md border border-negative/30 bg-negative/10 p-3 text-xs text-negative">
+          {(executeMutation.error ?? previewMutation.error) instanceof Error
+            ? ((executeMutation.error ?? previewMutation.error) as Error).message
+            : "Trading request failed."}
+        </div>
+      ) : null}
+
+      <TradingPreviewPanel preview={previewResponse} executionResult={executionResult} />
     </div>
   );
 }

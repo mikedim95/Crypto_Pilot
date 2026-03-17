@@ -113,10 +113,11 @@ interface BinanceRequestOptions {
   params?: RequestParams;
   signed?: boolean;
   credentials?: BinanceCredentials | null;
+  method?: "GET" | "POST";
 }
 
 async function requestBinance<T>(options: BinanceRequestOptions): Promise<T> {
-  const { path, params = {}, signed = false, credentials = null } = options;
+  const { path, params = {}, signed = false, credentials = null, method = "GET" } = options;
 
   if (signed && !credentials) {
     throw new Error("Binance credentials are not configured.");
@@ -156,7 +157,7 @@ async function requestBinance<T>(options: BinanceRequestOptions): Promise<T> {
   let parsed: unknown = null;
 
   try {
-    response = await fetch(url, { method: "GET", headers, signal: controller.signal });
+    response = await fetch(url, { method, headers, signal: controller.signal });
     bodyText = await response.text();
     parsed = parseJsonSafely(bodyText);
   } catch (error) {
@@ -206,6 +207,20 @@ export function signedGet<T>(
     params,
     signed: true,
     credentials,
+  });
+}
+
+export function signedPost<T>(
+  path: string,
+  params: RequestParams,
+  credentials: BinanceCredentials
+): Promise<T> {
+  return requestBinance<T>({
+    path,
+    params,
+    signed: true,
+    credentials,
+    method: "POST",
   });
 }
 

@@ -30,6 +30,16 @@ export function useTradingPairPreview(
   });
 }
 
+export function useTradingAssets(accountType: PortfolioAccountType = "real") {
+  return useQuery({
+    queryKey: ["trading-assets", accountType],
+    queryFn: () => backendApi.getTradingAssets(accountType),
+    staleTime: 5_000,
+    refetchInterval: 15_000,
+    retry: 1,
+  });
+}
+
 export function useOrdersData() {
   return useQuery({
     queryKey: ["orders"],

@@ -304,13 +304,88 @@ export interface TradingPairPreview {
   quoteChange24h: number;
   baseBalance: number;
   quoteBalance: number;
+  baseReservedBalance: number;
+  quoteReservedBalance: number;
+  baseFreeBalance: number;
+  quoteFreeBalance: number;
+  baseLockedBalance: number;
+  quoteLockedBalance: number;
   pricingSource: "direct" | "inverse" | "usd_cross";
+  executionSymbol: string | null;
+  executionSide: "BUY" | "SELL" | null;
+  executable: boolean;
 }
 
 export interface TradingPairPreviewResponse {
   accountType: PortfolioAccountType;
   pair: TradingPairPreview;
   generatedAt: string;
+}
+
+export interface TradingAssetAvailability {
+  symbol: string;
+  name: string;
+  totalAmount: number;
+  reservedAmount: number;
+  freeAmount: number;
+  lockedAmount: number;
+  priceUsd: number;
+  totalValueUsd: number;
+  reservedValueUsd: number;
+  freeValueUsd: number;
+}
+
+export interface TradingAssetsResponse {
+  accountType: PortfolioAccountType;
+  assets: TradingAssetAvailability[];
+  generatedAt: string;
+}
+
+export type TradingAmountMode = "selling_asset" | "buying_asset" | "buying_asset_usdt";
+
+export interface TradingTransactionRequest {
+  accountType?: PortfolioAccountType;
+  buyingAsset: string;
+  sellingAsset: string;
+  amountMode: TradingAmountMode;
+  amount: number;
+}
+
+export interface TradePreviewResponse {
+  accountType: PortfolioAccountType;
+  buyingAsset: TradingAssetAvailability;
+  sellingAsset: TradingAssetAvailability;
+  amountMode: TradingAmountMode;
+  requestedAmount: number;
+  buyAmount: number;
+  sellAmount: number;
+  buyWorthUsdt: number;
+  priceInSellingAsset: number;
+  inversePrice: number;
+  pricingSource: "direct" | "inverse" | "usd_cross";
+  executionSymbol: string | null;
+  executionSide: "BUY" | "SELL" | null;
+  executable: boolean;
+  warnings: string[];
+  blockingReasons: string[];
+  generatedAt: string;
+}
+
+export interface TradeExecutionResponse {
+  accountType: PortfolioAccountType;
+  preview: TradePreviewResponse;
+  execution: {
+    status: "completed";
+    orderId: string | null;
+    symbol: string | null;
+    side: "BUY" | "SELL" | null;
+    executedBuyAmount: number;
+    executedSellAmount: number;
+    executedBuyWorthUsdt: number;
+    message: string;
+    executedAt: string;
+    raw: unknown;
+  };
 }
 
 export interface OrdersResponse {

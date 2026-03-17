@@ -55,6 +55,10 @@ import type {
   StrategyStateResponse,
   StrategyVersionsResponse,
   TradingPairPreviewResponse,
+  TradingAssetsResponse,
+  TradingTransactionRequest,
+  TradePreviewResponse,
+  TradeExecutionResponse,
   StrategyValidationResponse,
   VerifyMinerDraftResponse,
 } from "@/types/api";
@@ -185,8 +189,20 @@ export const backendApi = {
     }),
   getDashboard: (accountType: PortfolioAccountType = "real") =>
     apiRequest<DashboardResponse>(withQuery("/api/dashboard", { accountType })),
+  getTradingAssets: (accountType: PortfolioAccountType = "real") =>
+    apiRequest<TradingAssetsResponse>(withQuery("/api/trading/assets", { accountType })),
   getTradingPairPreview: (base: string, quote: string, accountType: PortfolioAccountType = "real") =>
     apiRequest<TradingPairPreviewResponse>(withQuery("/api/trading/pair-preview", { base, quote, accountType })),
+  previewTrade: (body: TradingTransactionRequest) =>
+    apiRequest<TradePreviewResponse>("/api/trading/preview", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  executeTrade: (body: TradingTransactionRequest) =>
+    apiRequest<TradeExecutionResponse>("/api/trading/execute", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getOrders: () => apiRequest<OrdersResponse>("/api/orders"),
   getBtcNewsInsights: () => apiRequest<BtcNewsInsightsResponse>("/api/news/btc/insights"),
   getDecisionIntelligence: (accountType: PortfolioAccountType = "real") =>
