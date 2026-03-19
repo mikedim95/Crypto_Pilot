@@ -4,6 +4,7 @@ import { StrategyRepository } from "./strategy-repository.js";
 import { MockHistoricalMarketDataSource } from "./historical-market-data.js";
 import { computeBacktestMetrics } from "./performance-metrics.js";
 import { detectMarketRegime } from "./strategy-regime.js";
+import { getBasicStrategyIds } from "./strategy-catalog.js";
 import { buildHistoricalStrategyMarketContext, BTC_CONTEXT_SYMBOLS } from "./strategy-market-context.js";
 import { StrategyUserScope } from "./strategy-user-scope.js";
 import {
@@ -38,6 +39,48 @@ function deriveTimeframe(startDate: string, endDate: string): "1h" | "1d" {
   const end = new Date(endDate).getTime();
   const rangeDays = Math.max(1, Math.round((end - start) / (24 * 60 * 60 * 1000)));
   return rangeDays <= 45 ? "1h" : "1d";
+}
+
+function normalizeExecutionMode(mode: string | undefined): "manual" | "hybrid" | "automatic" {
+  if (mode === "semi_auto" || mode === "hybrid") return "hybrid";
+  if (mode === "auto" || mode === "automatic") return "automatic";
+  return "manual";
+}
+
+function resolveReplayBaseStrategyIds(strategy: StrategyConfig): string[] {
+  const strategyMode = normalizeExecutionMode(strategy.executionMode);
+  const requestedBaseStrategies = (strategy.baseStrategies ?? [])
+    .map((strategyId) => strategyId.trim().toLowerCase())
+    .filter((strategyId) => strategyId.length > 0 && strategyId !== strategy.id.toLowerCase());
+
+  if (strategyMode === "automatic" && requestedBaseStrategies.length === 0) {
+    requestedBaseStrategies.push(
+      ...getBasicStrategyIds().filter((strategyId) => strategyId !== strategy.id.toLowerCase())
+    );
+  }
+
+  const fallbackStrategyId = strategy.strategySelectionConfig?.fallbackStrategy?.trim().toLowerCase();
+  if (fallbackStrategyId && fallbackStrategyId !== strategy.id.toLowerCase()) {
+    requestedBaseStrategies.push(fallbackStrategyId);
+  }
+
+  return Array.from(new Set(requestedBaseStrategies));
+}
+
+function buildReplaySymbolUniverse(
+  strategy: StrategyConfig,
+  strategyUniverse: Record<string, StrategyConfig>,
+  baseCurrency: string
+): string[] {
+  const symbols = new Set<string>([...Object.keys(strategy.baseAllocation), baseCurrency, ...BTC_CONTEXT_SYMBOLS]);
+
+  resolveReplayBaseStrategyIds(strategy).forEach((strategyId) => {
+    const baseStrategy = strategyUniverse[strategyId] ?? strategyUniverse[strategyId.toLowerCase()];
+    if (!baseStrategy) return;
+    Object.keys(baseStrategy.baseAllocation).forEach((symbol) => symbols.add(symbol));
+  });
+
+  return sortSymbols(symbols);
 }
 
 function portfolioValueFromHoldings(holdings: Holdings, prices: Record<string, number>): number {
@@ -384,7 +427,7 @@ export class BacktestEngine {
 
     try {
       const portfolioSymbols = sortSymbols([...Object.keys(strategy.baseAllocation), request.baseCurrency]);
-      const seriesSymbols = sortSymbols([...portfolioSymbols, ...BTC_CONTEXT_SYMBOLS]);
+      const seriesSymbols = buildReplaySymbolUniverse(strategy, strategyUniverse, request.baseCurrency);
       const series = await this.historicalMarketData.getSeries({
         symbols: seriesSymbols,
         startDate: request.startDate,
