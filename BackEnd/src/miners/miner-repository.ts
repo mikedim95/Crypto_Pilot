@@ -22,13 +22,23 @@ import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord, toM
 
 export class MinerRepository {
   private initPromise: Promise<void> | null = null;
+  private initialized = false;
 
   async init(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
     if (!this.initPromise) {
-      this.initPromise = this.ensureSchema().catch((error) => {
-        this.initPromise = null;
-        throw error;
-      });
+      this.initPromise = this.ensureSchema()
+        .then(() => {
+          this.initialized = true;
+        })
+        .catch((error) => {
+          this.initPromise = null;
+          this.initialized = false;
+          throw error;
+        });
     }
     await this.initPromise;
   }

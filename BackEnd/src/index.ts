@@ -536,6 +536,7 @@ const shutdown = (): void => {
 async function bootstrap(): Promise<void> {
   await strategyRepository.init();
   await signalOutcomeService.init();
+  await minerRepository.init();
 
   server = app.listen(port, () => {
     // Keep startup log minimal and avoid printing credentials.
@@ -546,14 +547,7 @@ async function bootstrap(): Promise<void> {
     console.error("[strategy-scheduler] Failed to start:", error);
   });
 
-  minerRepository
-    .init()
-    .then(() => {
-      minerPollingService.start();
-    })
-    .catch((error) => {
-      console.error("[miner-polling] Failed to initialize:", error);
-    });
+  minerPollingService.start();
 }
 
 bootstrap().catch((error) => {
