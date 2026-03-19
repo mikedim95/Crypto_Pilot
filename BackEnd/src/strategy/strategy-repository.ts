@@ -1976,6 +1976,7 @@ export class StrategyRepository {
 
   async applyRebalanceAllocationProfileExecution(
     profileId: string,
+    allocation: RebalanceAllocationProfile["allocation"],
     holdings: DemoAccountHolding[],
     executedAtIso: string,
     scope?: StrategyUserScope
@@ -1984,6 +1985,7 @@ export class StrategyRepository {
       const profile = store.rebalanceAllocationProfiles.find((item) => item.id === profileId);
       if (!profile) return null;
 
+      profile.allocation = normalizeAllocation(allocation, [...Object.keys(profile.allocation), ...Object.keys(allocation)]);
       profile.holdings = holdings
         .map((holding) => normalizeDemoAccountHolding(holding))
         .filter((holding): holding is DemoAccountHolding => holding !== null);

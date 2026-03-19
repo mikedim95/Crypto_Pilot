@@ -794,7 +794,13 @@ export class StrategyRunner {
           evaluationWithProfile.adjustedTargetAllocation
         );
 
-        await this.repository.applyRebalanceAllocationProfileExecution(profile.id, nextHoldings, completedAt, userScope);
+        await this.repository.applyRebalanceAllocationProfileExecution(
+          profile.id,
+          evaluationWithProfile.adjustedTargetAllocation,
+          nextHoldings,
+          completedAt,
+          userScope
+        );
         executionWarnings.push(
           shouldForceManualRebalance && !evaluationWithProfile.executionPlan.rebalanceRequired
             ? "Manual execution executed the allocation rebalance to the exact target allocation at current market prices."
