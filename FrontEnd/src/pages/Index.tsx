@@ -8,7 +8,7 @@ import { PortfolioPage } from "@/pages/PortfolioPage";
 import { TradingPage } from "@/pages/TradingPage";
 import { ExchangeIntelligencePage } from "@/pages/ExchangeIntelligencePage";
 import { ExecutionSimulatorPage } from "@/pages/ExecutionSimulatorPage";
-import { RebalancePage } from "@/pages/RebalancePage";
+import { BotsPage } from "@/pages/BotsPage";
 import { AutomationPage } from "@/pages/AutomationPage";
 import { BtcNewsInsightsPage } from "@/pages/BtcNewsInsightsPage";
 import { DecisionIntelligencePage } from "@/pages/DecisionIntelligencePage";
@@ -54,7 +54,8 @@ const Index = ({ session, onLogout }: IndexProps) => {
       case "execution-simulator":
         return <ExecutionSimulatorPage />;
       case "rebalance":
-        return <RebalancePage accountType={accountType} />;
+      case "bots":
+        return <BotsPage accountType={accountType} />;
       case "automation":
         return <AutomationPage accountType={accountType} />;
       case "decision-intelligence":

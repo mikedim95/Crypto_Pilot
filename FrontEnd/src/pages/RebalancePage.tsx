@@ -6,8 +6,8 @@ import { backendApi } from "@/lib/api";
 import {
   useDashboardData,
   useDemoAccountSettings,
-  useRebalanceAllocationProfiles,
-  useRebalanceAllocationState,
+  useBotProfiles,
+  useBotState,
   useStrategies,
   useStrategyRunDetails,
   useStrategyRuns,
@@ -73,7 +73,7 @@ const EMPTY_PROFILES: RebalanceAllocationProfile[] = [];
 const EMPTY_RUNS: StrategyRun[] = [];
 const EMPTY_ALLOCATION_MAP: Record<string, number> = {};
 
-interface RebalancePageProps {
+interface BotsPageProps {
   accountType: PortfolioAccountType;
 }
 
@@ -416,7 +416,7 @@ function getRunSummary(run: StrategyRun): string {
     return run.skipReason ?? run.warnings[0] ?? "Execution skipped.";
   }
   if (run.warnings.some((warning) => warning.toLowerCase().includes("executed"))) {
-    return "Rebalance executed.";
+    return "Bot executed.";
   }
   if (run.warnings.some((warning) => warning.toLowerCase().includes("no rebalance"))) {
     return "Evaluated with no changes.";
@@ -481,7 +481,7 @@ function PendingActionModal({ title, description }: PendingActionModalProps) {
   );
 }
 
-export function RebalancePage({ accountType }: RebalancePageProps) {
+export function BotsPage({ accountType }: BotsPageProps) {
   const queryClient = useQueryClient();
   const { data: dashboardData } = useDashboardData(accountType);
   const { data: demoAccountSettingsData } = useDemoAccountSettings();
@@ -498,7 +498,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     data: profilesData,
     isPending: loadingProfiles,
     error: profilesError,
-  } = useRebalanceAllocationProfiles();
+  } = useBotProfiles();
   const profiles = profilesData?.profiles ?? EMPTY_PROFILES;
   const historyRuns = historyData?.runs ?? EMPTY_RUNS;
   const demoAccountBalance = demoAccountSettingsData?.demoAccount.balance;
@@ -572,7 +572,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     data: state,
     isPending: loadingState,
     error: stateError,
-  } = useRebalanceAllocationState(selectedProfileId || undefined);
+  } = useBotState(selectedProfileId || undefined);
   const { data: runDetailsData, isPending: loadingRunDetails } = useStrategyRunDetails(
     runDetailsModalOpen ? selectedRunId || undefined : undefined
   );
@@ -580,7 +580,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
   const selectedRunExecutionPlan = runDetailsData?.executionPlan ?? null;
 
   const upsertProfileInCache = (profile: RebalanceAllocationProfile): void => {
-    queryClient.setQueryData<RebalanceAllocationProfilesResponse>(["rebalance-allocation-profiles"], (current) => {
+    queryClient.setQueryData<RebalanceAllocationProfilesResponse>(["bot-profiles"], (current) => {
       const existingProfiles = current?.profiles ?? [];
       const nextProfiles = [profile, ...existingProfiles.filter((entry) => entry.id !== profile.id)];
       return { profiles: nextProfiles };
@@ -588,7 +588,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
   };
 
   const removeProfileFromCache = (profileId: string): void => {
-    queryClient.setQueryData<RebalanceAllocationProfilesResponse>(["rebalance-allocation-profiles"], (current) => ({
+    queryClient.setQueryData<RebalanceAllocationProfilesResponse>(["bot-profiles"], (current) => ({
       profiles: (current?.profiles ?? []).filter((entry) => entry.id !== profileId),
     }));
   };
@@ -596,7 +596,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
   const invalidateQueries = async (options?: { profileId?: string; includeState?: boolean; runId?: string }): Promise<void> => {
     const targetProfileId = options?.profileId ?? selectedProfileId;
     const tasks = [
-      queryClient.invalidateQueries({ queryKey: ["rebalance-allocation-profiles"] }),
+      queryClient.invalidateQueries({ queryKey: ["bot-profiles"] }),
       queryClient.invalidateQueries({ queryKey: ["strategy-runs", "demo"] }),
       queryClient.invalidateQueries({ queryKey: ["strategies"] }),
       queryClient.invalidateQueries({ queryKey: ["dashboard", "demo"] }),
@@ -604,7 +604,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     ];
 
     if (options?.includeState !== false && targetProfileId) {
-      tasks.push(queryClient.invalidateQueries({ queryKey: ["rebalance-allocation-state", targetProfileId] }));
+      tasks.push(queryClient.invalidateQueries({ queryKey: ["bot-state", targetProfileId] }));
     }
 
     if (options?.runId) {
@@ -615,9 +615,9 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
   };
 
   const createProfileMutation = useMutation({
-    mutationFn: (payload: RebalanceAllocationInput) => backendApi.createRebalanceAllocationProfile(payload),
+    mutationFn: (payload: RebalanceAllocationInput) => backendApi.createBot(payload),
     onSuccess: (result) => {
-      toast.success(`Allocation "${result.profile.name}" created.`);
+      toast.success(`Bot "${result.profile.name}" created.`);
       setErrorMessage("");
       setProfileModalOpen(false);
       setEditingProfileId(null);
@@ -626,15 +626,15 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
       void invalidateQueries({ profileId: result.profile.id });
     },
     onError: (error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to create allocation.");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to create bot.");
     },
   });
 
   const updateProfileMutation = useMutation({
     mutationFn: ({ profileId, payload }: { profileId: string; payload: RebalanceAllocationInput }) =>
-      backendApi.updateRebalanceAllocationProfile(profileId, payload),
+      backendApi.updateBot(profileId, payload),
     onSuccess: (result) => {
-      toast.success(`Allocation "${result.profile.name}" updated.`);
+      toast.success(`Bot "${result.profile.name}" updated.`);
       setErrorMessage("");
       setProfileModalOpen(false);
       setEditingProfileId(null);
@@ -643,22 +643,22 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
       void invalidateQueries({ profileId: result.profile.id });
     },
     onError: (error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update allocation.");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update bot.");
     },
   });
 
   const deleteProfileMutation = useMutation({
-    mutationFn: (profileId: string) => backendApi.deleteRebalanceAllocationProfile(profileId),
+    mutationFn: (profileId: string) => backendApi.deleteBot(profileId),
     onSuccess: (_, profileId) => {
       const deleted = profiles.find((profile) => profile.id === profileId);
-      toast.success(deleted ? `Allocation "${deleted.name}" deleted.` : "Allocation deleted.");
+      toast.success(deleted ? `Bot "${deleted.name}" deleted.` : "Bot deleted.");
       setErrorMessage("");
       const nextProfileId = profiles.find((profile) => profile.id !== profileId)?.id ?? "";
       if (selectedProfileId === profileId) {
         setSelectedProfileId(nextProfileId);
       }
       removeProfileFromCache(profileId);
-      queryClient.removeQueries({ queryKey: ["rebalance-allocation-state", profileId], exact: true });
+      queryClient.removeQueries({ queryKey: ["bot-state", profileId], exact: true });
       void invalidateQueries({ includeState: false });
     },
     onError: (error) => {
@@ -667,11 +667,11 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
   });
 
   const executeProfileMutation = useMutation({
-    mutationFn: (profileId: string) => backendApi.executeRebalanceAllocationProfile(profileId),
+    mutationFn: (profileId: string) => backendApi.executeBot(profileId),
     onSuccess: (result) => {
       const message = result.run.warnings.some((warning) => warning.toLowerCase().includes("executed"))
-        ? "Allocation rebalance executed using the latest market prices."
-        : `Allocation execution completed with status: ${result.run.status}.`;
+        ? "Bot executed using the latest market prices."
+        : `Bot run completed with status: ${result.run.status}.`;
       toast.success(message);
       setErrorMessage("");
       const targetProfileId = result.run.rebalanceAllocationId ?? selectedProfileId;
@@ -679,11 +679,11 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
         result.run.status === "completed" &&
         Boolean(result.run.adjustedAllocation) &&
         Boolean(targetProfileId) &&
-        Boolean(queryClient.getQueryData<RebalanceAllocationStateResponse>(["rebalance-allocation-state", targetProfileId]));
+        Boolean(queryClient.getQueryData<RebalanceAllocationStateResponse>(["bot-state", targetProfileId]));
 
       if (targetProfileId) {
         setSelectedProfileId(targetProfileId);
-        queryClient.setQueryData<RebalanceAllocationProfilesResponse>(["rebalance-allocation-profiles"], (current) => ({
+        queryClient.setQueryData<RebalanceAllocationProfilesResponse>(["bot-profiles"], (current) => ({
           profiles: (current?.profiles ?? []).map((profile) =>
             profile.id === targetProfileId
               ? {
@@ -698,7 +698,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
 
         if (canProjectExecutedState) {
           queryClient.setQueryData<RebalanceAllocationStateResponse>(
-            ["rebalance-allocation-state", targetProfileId],
+            ["bot-state", targetProfileId],
             (current) => (current ? createExecutedStateSnapshot(current, result.run) : current)
           );
         }
@@ -712,7 +712,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
       });
     },
     onError: (error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to execute allocation.");
+      setErrorMessage(error instanceof Error ? error.message : "Unable to run bot.");
     },
   });
 
@@ -780,23 +780,23 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     ]
   );
   const selectedRunSummary = useMemo(() => {
-    if (!selectedRun) return "Select a rebalance event to inspect it.";
+    if (!selectedRun) return "Select a bot run to inspect it.";
     if (selectedRun.status === "failed") {
-      return selectedRun.error ?? "This rebalance event failed before completion.";
+      return selectedRun.error ?? "This bot run failed before completion.";
     }
     if (selectedRun.status === "skipped") {
-      return selectedRun.skipReason ?? selectedRun.warnings[0] ?? "This rebalance event was skipped.";
+      return selectedRun.skipReason ?? selectedRun.warnings[0] ?? "This bot run was skipped.";
     }
     if (!selectedRunExecutionPlan) {
-      return "Loading the execution plan for this rebalance event.";
+      return "Loading the execution plan for this bot run.";
     }
 
     const portfolioValue = selectedRun.inputSnapshot?.portfolio.totalValue;
     const assetCount = selectedRun.inputSnapshot?.portfolio.assets.length ?? 0;
     const tradeCount = selectedRunExecutionPlan.recommendedTrades.length;
     const executionState = selectedRun.warnings.some((warning) => warning.toLowerCase().includes("executed"))
-      ? "The rebalance executed"
-      : "The rebalance evaluated";
+      ? "The bot executed"
+      : "The bot evaluated";
 
     return `${executionState} from ${formatNotional(portfolioValue, selectedRunBaseCurrency)}${assetCount > 0 ? ` across ${assetCount} assets` : ""}. Drift measured ${formatPercent(selectedRunExecutionPlan.driftPct)}, estimated turnover was ${formatPercent(selectedRunExecutionPlan.estimatedTurnoverPct)}, and ${tradeCount} trade${tradeCount === 1 ? "" : "s"} ${tradeCount === 1 ? "was" : "were"} generated.`;
   }, [selectedRun, selectedRunBaseCurrency, selectedRunExecutionPlan]);
@@ -812,18 +812,18 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
 
   const pendingAction = createProfileMutation.isPending
     ? {
-        title: "Creating allocation",
-        description: "Saving the capital bucket, validating the linked strategy, and preparing the rebalance allocation now.",
+        title: "Creating bot",
+        description: "Saving the bot, validating the linked strategy, and preparing its capital bucket now.",
       }
     : updateProfileMutation.isPending
       ? {
-          title: "Saving allocation",
-          description: "Updating the allocation profile and refreshing the linked rebalance state.",
+          title: "Saving bot",
+          description: "Updating the bot and refreshing its linked state.",
         }
       : executeProfileMutation.isPending
         ? {
-            title: "Executing allocation",
-            description: "Refreshing market data and applying the latest rebalance plan. This can take a few seconds.",
+            title: "Running bot",
+            description: "Refreshing market data and applying the latest bot plan. This can take a few seconds.",
           }
         : null;
 
@@ -954,11 +954,11 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     });
 
     if (!name) {
-      setErrorMessage("Allocation name is required.");
+      setErrorMessage("Bot name is required.");
       return;
     }
     if (!strategyId) {
-      setErrorMessage("Choose a usable strategy for this allocation.");
+      setErrorMessage("Choose a usable strategy for this bot.");
       return;
     }
     if (!usableStrategies.some((strategy) => strategy.id === strategyId)) {
@@ -975,7 +975,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
       projectedCapitalReservation - demoAccountBalance > 0.0001
     ) {
       setErrorMessage(
-        `Enabled allocations would reserve ${formatUsd(projectedCapitalReservation)} while the demo account balance is ${formatUsd(demoAccountBalance)}.`
+        `Enabled bots would reserve ${formatUsd(projectedCapitalReservation)} while the demo account balance is ${formatUsd(demoAccountBalance)}.`
       );
       return;
     }
@@ -1047,7 +1047,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
 
   const removeProfile = (profile: RebalanceAllocationProfile): void => {
     if (deleteProfileMutation.isPending) return;
-    if (!window.confirm(`Delete allocation "${profile.name}"?`)) return;
+    if (!window.confirm(`Delete bot "${profile.name}"?`)) return;
     setErrorMessage("");
     deleteProfileMutation.mutate(profile.id);
   };
@@ -1065,9 +1065,9 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
     <div className="space-y-6 p-4 md:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h2 className="text-lg font-mono font-semibold text-foreground">Rebalance</h2>
+          <h2 className="text-lg font-mono font-semibold text-foreground">Bots</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Store multiple allocation situations, link each one to a usable strategy, and execute them manually or automatically.
+            Store multiple bots, link each one to a usable strategy, and let them act on behalf of the user with dedicated capital.
           </p>
         </div>
 
@@ -1089,7 +1089,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-xs font-mono font-semibold text-primary-foreground transition-opacity disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Play className="h-3.5 w-3.5" />
-                Execute Allocation
+                Run Bot
               </button>
             </>
           ) : null}
@@ -1100,13 +1100,13 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
             className="inline-flex items-center justify-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-4 py-2 text-xs font-mono font-semibold text-primary transition-colors hover:bg-primary/15"
           >
             <Plus className="h-3.5 w-3.5" />
-            Create Allocation
+            Create Bot
           </button>
         </div>
       </div>
 
       <div className="rounded-lg border border-border bg-card px-4 py-3 text-[11px] text-muted-foreground">
-        Strategies decide the target. Allocation profiles define the capital bucket, managed funds, and auto-execution rules for each rebalance situation.
+        Strategies decide the target. Bots define the capital bucket, managed funds, and auto-execution rules for each automated agent.
       </div>
 
       {errorMessage ? (
@@ -1121,7 +1121,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
 
       {profilesError ? (
         <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">
-          {profilesError instanceof Error ? profilesError.message : "Failed to load allocation profiles."}
+          {profilesError instanceof Error ? profilesError.message : "Failed to load bots."}
         </div>
       ) : null}
 
@@ -1153,10 +1153,10 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
         </div>
       ) : profiles.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card px-6 py-10 text-center animate-fade-scale-in">
-          <div className="text-[11px] font-mono uppercase tracking-[0.24em] text-muted-foreground">No Active Allocation</div>
-          <h3 className="mt-3 text-lg font-mono font-semibold text-foreground">Create your first rebalance allocation</h3>
+          <div className="text-[11px] font-mono uppercase tracking-[0.24em] text-muted-foreground">No Bots Yet</div>
+          <h3 className="mt-3 text-lg font-mono font-semibold text-foreground">Create your first bot</h3>
           <p className="mx-auto mt-3 max-w-2xl text-sm text-muted-foreground">
-            Each allocation keeps its own capital bucket, enabled funds, linked strategy, and execution policy so you can switch between multiple rebalance situations.
+            Each bot keeps its own capital bucket, enabled funds, linked strategy, and execution policy so you can run multiple managed agents side by side.
           </p>
           <button
             type="button"
@@ -1164,14 +1164,14 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
             className="mt-5 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-mono font-semibold text-primary-foreground"
           >
             <Plus className="h-4 w-4" />
-            Create Allocation
+            Create Bot
           </button>
         </div>
       ) : null}
 
       {profiles.length > 0 ? (
         <div className="space-y-4">
-          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Stored Allocation Situations</div>
+          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Stored Bots</div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {profiles.map((profile) => {
               const selected = profile.id === selectedProfileId;
@@ -1311,13 +1311,13 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
             <>
           {stateError ? (
             <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">
-              {stateError instanceof Error ? stateError.message : "Failed to evaluate the selected allocation."}
+              {stateError instanceof Error ? stateError.message : "Failed to evaluate the selected bot."}
             </div>
           ) : null}
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
             <div className="rounded-lg border border-border bg-card p-4">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Loaded Allocation</div>
+              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Loaded Bot</div>
               <div className="mt-2 text-sm font-mono text-foreground">{selectedProfile.name}</div>
               <div className="mt-1 text-xs text-muted-foreground">{formatUsd(selectedProfile.allocatedCapital)} capital</div>
             </div>
@@ -1332,7 +1332,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
               <div className="mt-1 text-xs text-muted-foreground">{EXECUTION_POLICY_META[selectedPolicy].helper}</div>
             </div>
             <div className="rounded-lg border border-border bg-card p-4">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Rebalance Required</div>
+              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Adjustment Needed</div>
               <div
                 className={cn(
                   "mt-2 text-sm font-mono",
@@ -1526,7 +1526,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
 
           <div className="rounded-lg border border-border bg-card overflow-hidden">
             <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
-              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Rebalance History</div>
+              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Bot History</div>
               <div className="text-[11px] font-mono text-muted-foreground">
                 {allocationHistory.length} event{allocationHistory.length === 1 ? "" : "s"}
               </div>
@@ -1562,7 +1562,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                   ) : allocationHistory.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-4 py-6 text-center text-sm text-muted-foreground">
-                        No rebalance events have been recorded for this allocation yet.
+                        No bot runs have been recorded for this bot yet.
                       </td>
                     </tr>
                   ) : (
@@ -1613,7 +1613,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
               </table>
             </div>
             <div className="border-t border-border px-4 py-3 text-xs font-mono text-muted-foreground">
-              Click any event to open the full rebalance explanation and trade breakdown.
+              Click any run to open the full bot explanation and trade breakdown.
             </div>
           </div>
             </>
@@ -1631,12 +1631,12 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
             >
               <div className="flex items-start justify-between gap-4 border-b border-border bg-card/95 px-5 py-4 backdrop-blur">
                 <div className="min-w-0">
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Rebalance Event</div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Bot Run</div>
                   <div className="mt-1 truncate text-sm font-mono text-foreground">
                     {selectedRun?.rebalanceAllocationName ?? selectedProfile?.name ?? "--"}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {selectedRun ? `Started ${formatDateTime(selectedRun.startedAt)}` : "Select a rebalance event to inspect it."}
+                    {selectedRun ? `Started ${formatDateTime(selectedRun.startedAt)}` : "Select a bot run to inspect it."}
                   </div>
                 </div>
                 <button
@@ -1661,7 +1661,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                     <Skeleton className="h-48 w-full" />
                   </div>
                 ) : !selectedRun ? (
-                  <div className="text-sm text-muted-foreground">No rebalance event selected.</div>
+                  <div className="text-sm text-muted-foreground">No bot run selected.</div>
                 ) : (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3 md:grid-cols-6 text-xs font-mono">
@@ -1692,7 +1692,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                     </div>
 
                     <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">How This Rebalance Happened</div>
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">How This Bot Ran</div>
                       <div className="mt-2 text-sm leading-6 text-foreground">{selectedRunSummary}</div>
                     </div>
 
@@ -1717,7 +1717,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                           </div>
                         </div>
                         <div className="rounded-lg border border-border bg-secondary/30 p-3">
-                          <div className="text-muted-foreground">Rebalance Required</div>
+                          <div className="text-muted-foreground">Adjustment Needed</div>
                           <div className="mt-2 text-sm text-foreground">{selectedRunExecutionPlan.rebalanceRequired ? "Yes" : "No"}</div>
                         </div>
                         <div className="rounded-lg border border-border bg-secondary/30 p-3">
@@ -1867,7 +1867,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                     {selectedRun.inputSnapshot?.portfolio.assets?.length ? (
                       <div className="rounded-lg border border-border overflow-hidden">
                         <div className="border-b border-border px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                          Portfolio Snapshot Before Rebalance
+                          Portfolio Snapshot Before Bot Run
                         </div>
                         <div className="overflow-x-auto">
                           <table className="w-full min-w-[720px]">
@@ -1933,13 +1933,13 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
               <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-card/95 px-4 py-4 backdrop-blur sm:px-6">
                 <div className="min-w-0">
                   <div className="text-[11px] font-mono uppercase tracking-[0.26em] text-muted-foreground">
-                    {editingProfileId ? "Edit Allocation" : "Create Allocation"}
+                    {editingProfileId ? "Edit Bot" : "Create Bot"}
                   </div>
                   <h3 className="mt-2 text-lg font-semibold text-foreground sm:text-xl">
-                    {editingProfileId ? "Update rebalance situation" : "Create a new rebalance situation"}
+                    {editingProfileId ? "Update bot" : "Create a new bot"}
                   </h3>
                   <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                    Link a dedicated capital bucket to an enabled custom strategy, then choose whether it executes manually, on strategy runs, or on its own interval.
+                    Link a dedicated capital bucket to an enabled custom strategy, then decide whether the bot runs manually, on strategy runs, or on its own interval.
                   </p>
                 </div>
                 <button
@@ -1956,7 +1956,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                 <div className="mx-auto w-full max-w-4xl space-y-5">
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
-                      <label className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Allocation Name</label>
+                      <label className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Bot Name</label>
                       <input
                         value={formState.name}
                         onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))}
@@ -1980,7 +1980,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                       </select>
                       {usableStrategies.length === 0 ? (
                         <div className="mt-2 text-xs text-negative">
-                          Create and enable a custom strategy in Strategies before saving an allocation profile.
+                          Create and enable a custom strategy in Strategies before saving a bot.
                         </div>
                       ) : null}
                     </div>
@@ -1992,7 +1992,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                       value={formState.description}
                       onChange={(event) => setFormState((current) => ({ ...current, description: event.target.value }))}
                       className="mt-1 min-h-[88px] w-full rounded-md border border-border bg-secondary px-3 py-3 text-sm text-foreground outline-none"
-                      placeholder="Optional notes about when this allocation should be used."
+                      placeholder="Optional notes about when this bot should be used."
                     />
                   </div>
 
@@ -2030,7 +2030,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                           onChange={(event) => setFormState((current) => ({ ...current, isEnabled: event.target.checked }))}
                           className="h-4 w-4 rounded border-border bg-secondary"
                         />
-                        Enabled for automation
+                        Bot enabled
                       </label>
                     </div>
                   </div>
@@ -2244,7 +2244,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
 
               <div className="sticky bottom-0 flex flex-col gap-3 border-t border-border bg-card/95 px-4 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-6">
                 <div className="text-xs text-muted-foreground">
-                  Automatic modes always use the linked strategy. The strategy decides the target; this allocation decides the capital bucket and execution timing.
+                  Automatic modes always use the linked strategy. The strategy decides the target; this bot decides the capital bucket and execution timing.
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <button
@@ -2267,7 +2267,7 @@ export function RebalancePage({ accountType }: RebalancePageProps) {
                     }
                     className="rounded-md bg-primary px-4 py-2.5 text-sm font-mono font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {editingProfileId ? "Save Allocation" : "Create Allocation"}
+                    {editingProfileId ? "Save Bot" : "Create Bot"}
                   </button>
                 </div>
               </div>

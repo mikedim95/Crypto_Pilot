@@ -6,6 +6,10 @@ import type {
   BacktestResponse,
   BacktestTimelineResponse,
   BacktestsResponse,
+  BotInput,
+  BotResponse,
+  BotsResponse,
+  BotStateResponse,
   BtcNewsInsightsResponse,
   ConnectionStatus,
   DecisionIntelligenceResponse,
@@ -338,26 +342,48 @@ export const backendApi = {
     apiRequest<DemoAccountSettingsResponse>("/api/strategy-settings/demo-account", {
       method: "DELETE",
     }),
+  getBots: () =>
+    apiRequest<BotsResponse>("/api/bots"),
+  createBot: (body: BotInput) =>
+    apiRequest<BotResponse>("/api/bots", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateBot: (botId: string, body: BotInput) =>
+    apiRequest<BotResponse>(`/api/bots/${botId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteBot: (botId: string) =>
+    apiRequest<{ success: boolean }>(`/api/bots/${botId}`, {
+      method: "DELETE",
+    }),
+  getBotState: (botId: string) =>
+    apiRequest<BotStateResponse>(`/api/bots/${botId}/state`),
+  executeBot: (botId: string) =>
+    apiRequest<StrategyRunResponse>(`/api/bots/${botId}/execute`, {
+      method: "POST",
+    }),
   getRebalanceAllocationProfiles: () =>
-    apiRequest<RebalanceAllocationProfilesResponse>("/api/rebalance-allocations"),
+    apiRequest<RebalanceAllocationProfilesResponse>("/api/bots"),
   createRebalanceAllocationProfile: (body: RebalanceAllocationInput) =>
-    apiRequest<RebalanceAllocationProfileResponse>("/api/rebalance-allocations", {
+    apiRequest<RebalanceAllocationProfileResponse>("/api/bots", {
       method: "POST",
       body: JSON.stringify(body),
     }),
   updateRebalanceAllocationProfile: (profileId: string, body: RebalanceAllocationInput) =>
-    apiRequest<RebalanceAllocationProfileResponse>(`/api/rebalance-allocations/${profileId}`, {
+    apiRequest<RebalanceAllocationProfileResponse>(`/api/bots/${profileId}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),
   deleteRebalanceAllocationProfile: (profileId: string) =>
-    apiRequest<{ success: boolean }>(`/api/rebalance-allocations/${profileId}`, {
+    apiRequest<{ success: boolean }>(`/api/bots/${profileId}`, {
       method: "DELETE",
     }),
   getRebalanceAllocationState: (profileId: string) =>
-    apiRequest<RebalanceAllocationStateResponse>(`/api/rebalance-allocations/${profileId}/state`),
+    apiRequest<RebalanceAllocationStateResponse>(`/api/bots/${profileId}/state`),
   executeRebalanceAllocationProfile: (profileId: string) =>
-    apiRequest<StrategyRunResponse>(`/api/rebalance-allocations/${profileId}/execute`, {
+    apiRequest<StrategyRunResponse>(`/api/bots/${profileId}/execute`, {
       method: "POST",
     }),
 

@@ -144,7 +144,7 @@ export function TradingContextPanel(props: TradingContextPanelProps) {
           Free Balance Guard
         </div>
         <div className="mt-1">
-          Trading uses free balances only. Anything reserved inside enabled rebalance buckets is excluded from the sellable amount.
+          Trading uses free balances only. Anything reserved inside enabled bots is excluded from the sellable amount.
         </div>
       </div>
     </div>

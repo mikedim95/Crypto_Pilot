@@ -327,7 +327,7 @@ export function TradingPage({ accountType }: TradingPageProps) {
   const insufficientFreeBalance = Boolean(localPreview && sellingAvailability && localPreview.sellAmount > sellingAvailability.freeAmount + 0.00000001);
   const localBalanceMessage =
     localPreview && sellingAvailability && insufficientFreeBalance
-      ? `Requires ${localPreview.sellAmount.toFixed(8)} ${sellingAvailability.symbol} but only ${sellingAvailability.freeAmount.toFixed(8)} is free outside rebalance allocations.`
+      ? `Requires ${localPreview.sellAmount.toFixed(8)} ${sellingAvailability.symbol} but only ${sellingAvailability.freeAmount.toFixed(8)} is free outside active bots.`
       : null;
 
   const previewPayload = useMemo<TradingTransactionRequest | null>(() => {

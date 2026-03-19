@@ -108,6 +108,12 @@ function sendNotFound(res: express.Response, entity: string, id: string): void {
   res.status(404).json({ message: `${entity} ${id} not found.` });
 }
 
+function redirectToLegacyPath(req: express.Request, res: express.Response, targetPath: string): void {
+  const queryIndex = req.originalUrl.indexOf("?");
+  const query = queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : "";
+  res.redirect(307, `/api${targetPath}${query}`);
+}
+
 function parseAccountType(req: express.Request): PortfolioAccountType {
   const queryValue = typeof req.query?.accountType === "string" ? req.query.accountType : undefined;
   const bodyValue =
@@ -181,7 +187,7 @@ async function validateRebalanceAllocationCapitalBudget(
 
   const projectedCapital = committedCapital + input.allocatedCapital;
   if (projectedCapital - demoAccount.balance > 0.0001) {
-    return `Enabled allocations would reserve ${projectedCapital.toFixed(2)} while the demo account balance is ${demoAccount.balance.toFixed(2)}.`;
+    return `Enabled bots would reserve ${projectedCapital.toFixed(2)} while the demo account balance is ${demoAccount.balance.toFixed(2)}.`;
   }
 
   return null;
@@ -203,6 +209,11 @@ function canMoveToApprovalState(
 
 export function createStrategyRouter(deps: StrategyApiDeps): Router {
   const router = Router();
+
+  router.all("/bots", (req, res) => redirectToLegacyPath(req, res, "/rebalance-allocations"));
+  router.all("/bots/:id", (req, res) => redirectToLegacyPath(req, res, `/rebalance-allocations/${req.params.id}`));
+  router.all("/bots/:id/state", (req, res) => redirectToLegacyPath(req, res, `/rebalance-allocations/${req.params.id}/state`));
+  router.all("/bots/:id/execute", (req, res) => redirectToLegacyPath(req, res, `/rebalance-allocations/${req.params.id}/execute`));
 
   router.get("/strategy-settings/demo-account", async (req, res) => {
     const userScope = resolveStrategyUserScope(req);
@@ -263,7 +274,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
   router.post("/rebalance-allocations", async (req, res) => {
     const parsed = rebalanceAllocationProfileSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ message: "Invalid rebalance allocation payload.", errors: parsed.error.issues });
+      res.status(400).json({ message: "Invalid bot payload.", errors: parsed.error.issues });
       return;
     }
 
@@ -274,11 +285,11 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
       return;
     }
     if (isBasicStrategyId(strategy.id)) {
-      res.status(400).json({ message: "Rebalance allocations must reference a usable custom strategy." });
+      res.status(400).json({ message: "Bots must reference a usable custom strategy." });
       return;
     }
     if (!strategy.isEnabled) {
-      res.status(400).json({ message: "Rebalance allocations must reference an enabled strategy." });
+      res.status(400).json({ message: "Bots must reference an enabled strategy." });
       return;
     }
 
@@ -357,14 +368,14 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
   router.put("/rebalance-allocations/:id", async (req, res) => {
     const parsed = rebalanceAllocationProfileSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ message: "Invalid rebalance allocation payload.", errors: parsed.error.issues });
+      res.status(400).json({ message: "Invalid bot payload.", errors: parsed.error.issues });
       return;
     }
 
     const userScope = resolveStrategyUserScope(req);
     const existing = await deps.repository.getRebalanceAllocationProfile(req.params.id, userScope);
     if (!existing) {
-      sendNotFound(res, "Rebalance allocation", req.params.id);
+      sendNotFound(res, "Bot", req.params.id);
       return;
     }
 
@@ -374,11 +385,11 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
       return;
     }
     if (isBasicStrategyId(strategy.id)) {
-      res.status(400).json({ message: "Rebalance allocations must reference a usable custom strategy." });
+      res.status(400).json({ message: "Bots must reference a usable custom strategy." });
       return;
     }
     if (!strategy.isEnabled) {
-      res.status(400).json({ message: "Rebalance allocations must reference an enabled strategy." });
+      res.status(400).json({ message: "Bots must reference an enabled strategy." });
       return;
     }
 
@@ -459,7 +470,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
     const userScope = resolveStrategyUserScope(req);
     const removed = await deps.repository.deleteRebalanceAllocationProfile(req.params.id, userScope);
     if (!removed) {
-      sendNotFound(res, "Rebalance allocation", req.params.id);
+      sendNotFound(res, "Bot", req.params.id);
       return;
     }
 
@@ -471,7 +482,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
       const userScope = resolveStrategyUserScope(req);
       const state = await deps.runner.evaluateRebalanceAllocationProfileState(req.params.id, userScope);
       if (!state) {
-        sendNotFound(res, "Rebalance allocation", req.params.id);
+        sendNotFound(res, "Bot", req.params.id);
         return;
       }
 
@@ -493,7 +504,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
         composition: state.evaluation.composition,
       });
     } catch (error) {
-      res.status(500).json({ message: error instanceof Error ? error.message : "Unable to evaluate rebalance allocation." });
+      res.status(500).json({ message: error instanceof Error ? error.message : "Unable to evaluate bot." });
     }
   });
 
@@ -503,7 +514,7 @@ export function createStrategyRouter(deps: StrategyApiDeps): Router {
       const run = await deps.runner.executeRebalanceAllocationProfile(req.params.id, "api", userScope);
       res.json({ run });
     } catch (error) {
-      res.status(400).json({ message: error instanceof Error ? error.message : "Unable to execute rebalance allocation." });
+      res.status(400).json({ message: error instanceof Error ? error.message : "Unable to execute bot." });
     }
   });
 

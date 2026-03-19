@@ -644,7 +644,7 @@ export class StrategyRunner {
   ): Promise<StrategyRun> {
     const profile = await this.repository.getRebalanceAllocationProfile(profileId, userScope);
     if (!profile) {
-      throw new Error(`Rebalance allocation ${profileId} was not found.`);
+      throw new Error(`Bot ${profileId} was not found.`);
     }
 
     const strategy = await this.repository.getStrategy(profile.strategyId, userScope);

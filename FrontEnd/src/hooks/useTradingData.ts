@@ -215,10 +215,25 @@ export function useFleetLive() {
   });
 }
 
-export function useRebalanceAllocationProfiles() {
+export function useBotProfiles() {
   return useQuery({
-    queryKey: ["rebalance-allocation-profiles"],
-    queryFn: backendApi.getRebalanceAllocationProfiles,
+    queryKey: ["bot-profiles"],
+    queryFn: backendApi.getBots,
+    staleTime: 5_000,
+    refetchInterval: 15_000,
+    retry: 1,
+  });
+}
+
+export function useRebalanceAllocationProfiles() {
+  return useBotProfiles();
+}
+
+export function useBotState(profileId: string | undefined) {
+  return useQuery({
+    queryKey: ["bot-state", profileId],
+    queryFn: () => backendApi.getBotState(profileId ?? ""),
+    enabled: Boolean(profileId),
     staleTime: 5_000,
     refetchInterval: 15_000,
     retry: 1,
@@ -226,14 +241,7 @@ export function useRebalanceAllocationProfiles() {
 }
 
 export function useRebalanceAllocationState(profileId: string | undefined) {
-  return useQuery({
-    queryKey: ["rebalance-allocation-state", profileId],
-    queryFn: () => backendApi.getRebalanceAllocationState(profileId ?? ""),
-    enabled: Boolean(profileId),
-    staleTime: 5_000,
-    refetchInterval: 15_000,
-    retry: 1,
-  });
+  return useBotState(profileId);
 }
 
 export function useFleetHistory(scope: FleetHistoryScope = "hour") {

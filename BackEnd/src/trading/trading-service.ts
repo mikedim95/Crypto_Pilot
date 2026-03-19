@@ -370,7 +370,7 @@ export class TradingService {
     }
 
     if (input.accountType === "demo" && sellingAvailability.freeAmount <= 0) {
-      warnings.push(`${sellingAsset} has no free balance available outside rebalance allocations.`);
+      warnings.push(`${sellingAsset} has no free balance available outside active bots.`);
     }
 
     return {

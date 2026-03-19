@@ -888,6 +888,10 @@ export interface RebalanceAllocationInput {
   scheduleInterval?: string;
 }
 
+export type BotExecutionPolicy = RebalanceAllocationExecutionPolicy;
+export type BotProfile = RebalanceAllocationProfile;
+export type BotInput = RebalanceAllocationInput;
+
 export type AllocationMap = Record<string, number>;
 
 export interface StrategyCondition {
@@ -1170,6 +1174,10 @@ export interface RebalanceAllocationStateResponse extends StrategyStateResponse 
   profile: RebalanceAllocationProfile;
   strategy: StrategyConfig;
 }
+
+export type BotsResponse = RebalanceAllocationProfilesResponse;
+export type BotResponse = RebalanceAllocationProfileResponse;
+export type BotStateResponse = RebalanceAllocationStateResponse;
 
 export interface BacktestRun {
   id: string;

@@ -32,7 +32,7 @@ const navItems = [
   { id: "trading", label: "Trading", icon: ClipboardList },
   { id: "exchange-intelligence", label: "Exchange Intel", icon: ArrowLeftRight },
   { id: "execution-simulator", label: "Execution Sim", icon: PlaySquare },
-  { id: "rebalance", label: "Rebalance", icon: RefreshCw },
+  { id: "bots", label: "Bots", icon: RefreshCw },
   { id: "automation", label: "Strategies", icon: Bot },
   { id: "decision-intelligence", label: "Decision Intel", icon: BrainCircuit },
   { id: "signal-review", label: "Signal Review", icon: ActivitySquare },

@@ -1888,7 +1888,7 @@ export class StrategyRepository {
     return this.mutate(scope, (store) => {
       const nextProfile = normalizeRebalanceAllocationProfile(profile);
       if (!nextProfile) {
-        throw new Error("Invalid rebalance allocation profile.");
+        throw new Error("Invalid bot profile.");
       }
 
       const index = store.rebalanceAllocationProfiles.findIndex((item) => item.id === nextProfile.id);
