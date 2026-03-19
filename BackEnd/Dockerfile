@@ -1,15 +1,15 @@
-FROM node:20-alpine AS deps
+FROM --platform=$BUILDPLATFORM node:20-alpine AS deps
 WORKDIR /app
 COPY BackEnd/package*.json ./
 RUN npm ci
 
-FROM node:20-alpine AS build
+FROM --platform=$BUILDPLATFORM node:20-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY BackEnd/ .
 RUN npm run build
 
-FROM node:20-alpine AS runtime
+FROM --platform=$TARGETPLATFORM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY BackEnd/package*.json ./
