@@ -247,6 +247,10 @@ export interface FleetHistoryBucketRecord extends RowDataPacket {
   max_hotspot_temp: number | null;
 }
 
+export interface FleetHistoryBucketByMinerRecord extends FleetHistoryBucketRecord {
+  miner_id: number;
+}
+
 export interface MinerCreateInput {
   name: string;
   ip: string;

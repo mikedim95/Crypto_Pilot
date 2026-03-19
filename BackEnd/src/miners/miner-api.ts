@@ -8,6 +8,7 @@ import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
 import { MinerVerifyService } from "./miner-verify-service.js";
 import { buildApiBaseUrl } from "./miner-utils.js";
+import type { FleetHistorySeries, MinerEntity, MinerLiveData } from "./types.js";
 
 const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
@@ -55,6 +56,82 @@ const FLEET_HISTORY_SCOPE_CONFIG = {
   month: { rangeMs: 30 * 24 * 60 * 60 * 1000, bucketMs: 6 * 60 * 60 * 1000 },
 } as const;
 
+const FLEET_SNAPSHOT_CACHE_TTL_MS = 2_000;
+const FLEET_HISTORY_CACHE_TTL_MS = 5_000;
+
+type FleetHistoryScope = z.infer<typeof fleetHistoryQuerySchema>["scope"];
+
+interface TimedCacheEntry<T> {
+  expiresAt: number;
+  value: T;
+}
+
+function createTimedLoader<T>(ttlMs: number, load: () => Promise<T>): () => Promise<T> {
+  let cache: TimedCacheEntry<T> | null = null;
+  let inFlight: Promise<T> | null = null;
+
+  return async () => {
+    if (cache && cache.expiresAt > Date.now()) {
+      return cache.value;
+    }
+
+    if (inFlight) {
+      return inFlight;
+    }
+
+    inFlight = load()
+      .then((value) => {
+        cache = {
+          value,
+          expiresAt: Date.now() + ttlMs,
+        };
+        return value;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+
+    return inFlight;
+  };
+}
+
+function createTimedKeyedLoader<K, T>(
+  ttlMs: number,
+  getCacheKey: (key: K) => string,
+  load: (key: K) => Promise<T>
+): (key: K) => Promise<T> {
+  const cache = new Map<string, TimedCacheEntry<T>>();
+  const inFlight = new Map<string, Promise<T>>();
+
+  return async (key: K) => {
+    const cacheKey = getCacheKey(key);
+    const cached = cache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
+    const activeRequest = inFlight.get(cacheKey);
+    if (activeRequest) {
+      return activeRequest;
+    }
+
+    const request = load(key)
+      .then((value) => {
+        cache.set(cacheKey, {
+          value,
+          expiresAt: Date.now() + ttlMs,
+        });
+        return value;
+      })
+      .finally(() => {
+        inFlight.delete(cacheKey);
+      });
+
+    inFlight.set(cacheKey, request);
+    return request;
+  };
+}
+
 function isValidTemperature(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 150;
 }
@@ -96,6 +173,67 @@ interface MinerApiDeps {
 
 export function createMinerRouter(deps: MinerApiDeps): Router {
   const router = Router();
+
+  const loadFleetSnapshot = createTimedLoader<{
+    miners: MinerEntity[];
+    fleet: MinerLiveData[];
+    generatedAt: string;
+  }>(FLEET_SNAPSHOT_CACHE_TTL_MS, async () => {
+    const miners = await deps.repository.listMiners();
+    if (miners.length === 0) {
+      return {
+        miners,
+        fleet: [],
+        generatedAt: new Date().toISOString(),
+      };
+    }
+
+    const [snapshots, poolsByMinerId] = await Promise.all([
+      deps.repository.listLatestSnapshots(),
+      deps.repository.listPoolsForMinerIds(miners.map((miner) => miner.id)),
+    ]);
+    const snapshotMap = new Map(snapshots.map((snapshot) => [snapshot.minerId, snapshot]));
+
+    return {
+      miners,
+      fleet: miners.map((miner) =>
+        buildMinerLiveDataFromSnapshot(miner, snapshotMap.get(miner.id) ?? null, poolsByMinerId.get(miner.id) ?? [])
+      ),
+      generatedAt: new Date().toISOString(),
+    };
+  });
+
+  const loadFleetHistory = createTimedKeyedLoader<
+    FleetHistoryScope,
+    {
+      history: FleetHistorySeries[];
+      generatedAt: string;
+      scope: FleetHistoryScope;
+    }
+  >(FLEET_HISTORY_CACHE_TTL_MS, (scope) => scope, async (scope) => {
+    const scopeConfig = FLEET_HISTORY_SCOPE_CONFIG[scope];
+    const sinceIso = new Date(Date.now() - scopeConfig.rangeMs).toISOString();
+    const bucketSeconds = Math.max(60, Math.round(scopeConfig.bucketMs / 1000));
+    const miners = await deps.repository.listMiners();
+    const historyByMinerId = await deps.repository.listHistoryBucketsForMinerIdsSince(
+      miners.map((miner) => miner.id),
+      sinceIso,
+      bucketSeconds
+    );
+
+    return {
+      history: miners
+        .map((miner) => ({
+          minerId: miner.id,
+          minerName: miner.name,
+          minerIp: miner.ip,
+          points: historyByMinerId.get(miner.id) ?? [],
+        }))
+        .filter((series) => series.points.length > 0),
+      generatedAt: new Date().toISOString(),
+      scope,
+    };
+  });
 
   const getMinerOrRespond = async (minerId: number, res: Response) => {
     const miner = await deps.repository.getMinerById(minerId);
@@ -501,18 +639,11 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
   router.get(
     "/fleet/live",
     asyncHandler(async (_req, res) => {
-      const miners = await deps.repository.listMiners();
-      const snapshots = await deps.repository.listLatestSnapshots();
-      const snapshotMap = new Map(snapshots.map((snapshot) => [snapshot.minerId, snapshot]));
-
-      const fleet = await Promise.all(
-        miners.map(async (miner) => {
-          const pools = await deps.repository.listPools(miner.id);
-          return buildMinerLiveDataFromSnapshot(miner, snapshotMap.get(miner.id) ?? null, pools);
-        })
-      );
-
-      res.json({ miners: fleet });
+      const fleetSnapshot = await loadFleetSnapshot();
+      res.json({
+        miners: fleetSnapshot.fleet,
+        generatedAt: fleetSnapshot.generatedAt,
+      });
     })
   );
 
@@ -523,48 +654,17 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       if (!query) return;
 
       const scope = query.scope ?? "hour";
-      const scopeConfig = FLEET_HISTORY_SCOPE_CONFIG[scope];
-      const now = Date.now();
-      const sinceIso = new Date(now - scopeConfig.rangeMs).toISOString();
-      const miners = await deps.repository.listMiners();
-      const history = await Promise.all(
-        miners.map(async (miner) => {
-          const points = await deps.repository.listHistoryBucketsSince(
-            miner.id,
-            sinceIso,
-            Math.max(60, Math.round(scopeConfig.bucketMs / 1000))
-          );
-
-          return {
-            minerId: miner.id,
-            minerName: miner.name,
-            minerIp: miner.ip,
-            points,
-          };
-        })
-      );
-
-      res.json({
-        history: history.filter((series) => series.points.length > 0),
-        generatedAt: new Date().toISOString(),
-        scope,
-      });
+      const historyPayload = await loadFleetHistory(scope);
+      res.json(historyPayload);
     })
   );
 
   router.get(
     "/fleet/overview",
     asyncHandler(async (_req, res) => {
-      const miners = await deps.repository.listMiners();
-      const snapshots = await deps.repository.listLatestSnapshots();
-      const snapshotMap = new Map(snapshots.map((snapshot) => [snapshot.minerId, snapshot]));
-
-      const fleet = await Promise.all(
-        miners.map(async (miner) => {
-          const pools = await deps.repository.listPools(miner.id);
-          return buildMinerLiveDataFromSnapshot(miner, snapshotMap.get(miner.id) ?? null, pools);
-        })
-      );
+      const fleetSnapshot = await loadFleetSnapshot();
+      const miners = fleetSnapshot.miners;
+      const fleet = fleetSnapshot.fleet;
 
       const onlineMiners = fleet.filter((miner) => miner.online).length;
       const totalRateThs = fleet.reduce((sum, miner) => sum + (miner.totalRateThs ?? 0), 0);
@@ -589,7 +689,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
           totalPowerWatts,
           hottestBoardTemp,
           hottestHotspotTemp,
-          generatedAt: new Date().toISOString(),
+          generatedAt: fleetSnapshot.generatedAt,
         },
       });
     })

@@ -3,6 +3,7 @@ import pool from "../db.js";
 import { minerSchemaStatements } from "./miner-schema.js";
 import {
   FleetHistoryBucketRecord,
+  FleetHistoryBucketByMinerRecord,
   FleetHistoryPoint,
   MinerCommandEntity,
   MinerCommandLogInput,
@@ -390,34 +391,82 @@ export class MinerRepository {
     );
 
     return rows
-      .map((row) => {
-        const bucketIndex = Number(row.bucket_index);
-        if (!Number.isFinite(bucketIndex)) return null;
-
-        const totalRateThs =
-          typeof row.avg_total_rate_ths === "number" && Number.isFinite(row.avg_total_rate_ths)
-            ? Number(row.avg_total_rate_ths.toFixed(2))
-            : null;
-        const powerWatts =
-          typeof row.avg_power_watts === "number" && Number.isFinite(row.avg_power_watts)
-            ? Math.round(row.avg_power_watts)
-            : null;
-        const maxBoardTemp =
-          typeof row.max_board_temp === "number" && Number.isFinite(row.max_board_temp) ? row.max_board_temp : null;
-        const maxHotspotTemp =
-          typeof row.max_hotspot_temp === "number" && Number.isFinite(row.max_hotspot_temp) ? row.max_hotspot_temp : null;
-
-        return {
-          timestamp: new Date(bucketIndex * safeBucketSeconds * 1000).toISOString(),
-          online: row.online === true || row.online === 1,
-          totalRateThs,
-          maxBoardTemp,
-          maxHotspotTemp,
-          maxTemp: maxHotspotTemp ?? maxBoardTemp,
-          powerWatts,
-        } satisfies FleetHistoryPoint;
-      })
+      .map((row) => this.mapFleetHistoryBucket(row, safeBucketSeconds))
       .filter((point): point is FleetHistoryPoint => point !== null);
+  }
+
+  async listHistoryBucketsForMinerIdsSince(
+    minerIds: number[],
+    sinceIso: string,
+    bucketSeconds: number
+  ): Promise<Map<number, FleetHistoryPoint[]>> {
+    await this.init();
+
+    const safeMinerIds = [...new Set(minerIds.filter((minerId) => Number.isInteger(minerId) && minerId > 0))];
+    const pointsByMinerId = new Map<number, FleetHistoryPoint[]>();
+    for (const minerId of safeMinerIds) {
+      pointsByMinerId.set(minerId, []);
+    }
+
+    if (safeMinerIds.length === 0) {
+      return pointsByMinerId;
+    }
+
+    const safeBucketSeconds = Number.isInteger(bucketSeconds) && bucketSeconds > 0 ? bucketSeconds : 60;
+    const placeholders = safeMinerIds.map(() => "?").join(", ");
+    const [rows] = await pool.query<FleetHistoryBucketByMinerRecord[]>(
+      `
+        SELECT
+          miner_id,
+          FLOOR(UNIX_TIMESTAMP(created_at) / ?) AS bucket_index,
+          MAX(CASE WHEN online = 1 THEN 1 ELSE 0 END) AS online,
+          AVG(CASE WHEN total_rate_ths IS NOT NULL THEN total_rate_ths END) AS avg_total_rate_ths,
+          AVG(CASE WHEN power_watts > 0 THEN power_watts END) AS avg_power_watts,
+          NULLIF(
+            MAX(
+              GREATEST(
+                IF(board_temp_1 > 0 AND board_temp_1 <= 150, board_temp_1, -1),
+                IF(board_temp_2 > 0 AND board_temp_2 <= 150, board_temp_2, -1),
+                IF(board_temp_3 > 0 AND board_temp_3 <= 150, board_temp_3, -1)
+              )
+            ),
+            -1
+          ) AS max_board_temp,
+          NULLIF(
+            MAX(
+              GREATEST(
+                IF(hotspot_temp_1 > 0 AND hotspot_temp_1 <= 150, hotspot_temp_1, -1),
+                IF(hotspot_temp_2 > 0 AND hotspot_temp_2 <= 150, hotspot_temp_2, -1),
+                IF(hotspot_temp_3 > 0 AND hotspot_temp_3 <= 150, hotspot_temp_3, -1)
+              )
+            ),
+            -1
+          ) AS max_hotspot_temp
+        FROM miner_status_snapshots
+        WHERE miner_id IN (${placeholders})
+          AND created_at >= ?
+        GROUP BY miner_id, bucket_index
+        ORDER BY miner_id ASC, bucket_index ASC
+      `,
+      [safeBucketSeconds, ...safeMinerIds, toMysqlDateTime(sinceIso)]
+    );
+
+    for (const row of rows) {
+      const point = this.mapFleetHistoryBucket(row, safeBucketSeconds);
+      if (!point) {
+        continue;
+      }
+
+      const series = pointsByMinerId.get(row.miner_id);
+      if (series) {
+        series.push(point);
+        continue;
+      }
+
+      pointsByMinerId.set(row.miner_id, [point]);
+    }
+
+    return pointsByMinerId;
   }
 
   async replacePools(minerId: number, pools: MinerPoolPersistInput[]): Promise<MinerPoolEntity[]> {
@@ -472,6 +521,44 @@ export class MinerRepository {
       [minerId]
     );
     return rows.map(mapPoolRecord);
+  }
+
+  async listPoolsForMinerIds(minerIds: number[]): Promise<Map<number, MinerPoolEntity[]>> {
+    await this.init();
+
+    const safeMinerIds = [...new Set(minerIds.filter((minerId) => Number.isInteger(minerId) && minerId > 0))];
+    const poolsByMinerId = new Map<number, MinerPoolEntity[]>();
+    for (const minerId of safeMinerIds) {
+      poolsByMinerId.set(minerId, []);
+    }
+
+    if (safeMinerIds.length === 0) {
+      return poolsByMinerId;
+    }
+
+    const placeholders = safeMinerIds.map(() => "?").join(", ");
+    const [rows] = await pool.query<MinerPoolRecord[]>(
+      `
+        SELECT *
+        FROM miner_pools
+        WHERE miner_id IN (${placeholders})
+        ORDER BY miner_id ASC, pool_index ASC
+      `,
+      safeMinerIds
+    );
+
+    for (const row of rows) {
+      const poolEntity = mapPoolRecord(row);
+      const pools = poolsByMinerId.get(poolEntity.minerId);
+      if (pools) {
+        pools.push(poolEntity);
+        continue;
+      }
+
+      poolsByMinerId.set(poolEntity.minerId, [poolEntity]);
+    }
+
+    return poolsByMinerId;
   }
 
   async logCommand(input: MinerCommandLogInput): Promise<MinerCommandEntity> {
@@ -531,5 +618,36 @@ export class MinerRepository {
       [minerId, safeLimit]
     );
     return rows.map(mapCommandRecord);
+  }
+
+  private mapFleetHistoryBucket(
+    row: FleetHistoryBucketRecord | FleetHistoryBucketByMinerRecord,
+    bucketSeconds: number
+  ): FleetHistoryPoint | null {
+    const bucketIndex = Number(row.bucket_index);
+    if (!Number.isFinite(bucketIndex)) return null;
+
+    const totalRateThs =
+      typeof row.avg_total_rate_ths === "number" && Number.isFinite(row.avg_total_rate_ths)
+        ? Number(row.avg_total_rate_ths.toFixed(2))
+        : null;
+    const powerWatts =
+      typeof row.avg_power_watts === "number" && Number.isFinite(row.avg_power_watts)
+        ? Math.round(row.avg_power_watts)
+        : null;
+    const maxBoardTemp =
+      typeof row.max_board_temp === "number" && Number.isFinite(row.max_board_temp) ? row.max_board_temp : null;
+    const maxHotspotTemp =
+      typeof row.max_hotspot_temp === "number" && Number.isFinite(row.max_hotspot_temp) ? row.max_hotspot_temp : null;
+
+    return {
+      timestamp: new Date(bucketIndex * bucketSeconds * 1000).toISOString(),
+      online: row.online === true || row.online === 1,
+      totalRateThs,
+      maxBoardTemp,
+      maxHotspotTemp,
+      maxTemp: maxHotspotTemp ?? maxBoardTemp,
+      powerWatts,
+    } satisfies FleetHistoryPoint;
   }
 }
