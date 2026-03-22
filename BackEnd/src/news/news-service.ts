@@ -1,7 +1,15 @@
 import type { RowDataPacket } from "mysql2/promise";
-import pool from "../db.js";
+import pool, { dbConfig } from "../db.js";
 
-const NEWS_TABLE = "`newsFeed`.`btc_news_items`";
+const NEWS_TABLE_NAME = (process.env.MYAPP_NEWS_TABLE_NAME ?? "btc_news_items").trim() || "btc_news_items";
+const NEWS_SCHEMA_CANDIDATES = [
+  process.env.MYAPP_NEWS_DB_NAME,
+  dbConfig.database,
+  "newsFeed",
+]
+  .map((value) => normalizeNullableText(value))
+  .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
+const NEWS_EVENT_TIME_SQL = "COALESCE(published_at, created_at)";
 
 export type BtcNewsCurrentState =
   | "bullish"
@@ -135,6 +143,26 @@ function normalizeNullableText(value: string | null | undefined): string | null 
   return normalized.length > 0 ? normalized : null;
 }
 
+function escapeIdentifier(value: string): string {
+  return `\`${value.replace(/`/g, "``")}\``;
+}
+
+function buildQualifiedTableName(schema: string | null | undefined, table: string): string {
+  if (!schema) {
+    return escapeIdentifier(table);
+  }
+  return `${escapeIdentifier(schema)}.${escapeIdentifier(table)}`;
+}
+
+function isMissingTableError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  return code === "ER_NO_SUCH_TABLE" || code === "ER_BAD_TABLE_ERROR";
+}
+
 export function mapBiasToCurrentState(bias6h: number): BtcNewsCurrentState {
   if (bias6h >= 8) return "bullish";
   if (bias6h >= 3) return "mildly_bullish";
@@ -144,26 +172,78 @@ export function mapBiasToCurrentState(bias6h: number): BtcNewsCurrentState {
 }
 
 export class BtcNewsInsightsService {
+  private resolvedNewsTableName: string | null = null;
+  private resolvingNewsTableNamePromise: Promise<string> | null = null;
+
+  private async resolveNewsTableName(): Promise<string> {
+    if (this.resolvedNewsTableName) {
+      return this.resolvedNewsTableName;
+    }
+
+    if (!this.resolvingNewsTableNamePromise) {
+      this.resolvingNewsTableNamePromise = this.lookupNewsTableName()
+        .then((tableName) => {
+          this.resolvedNewsTableName = tableName;
+          return tableName;
+        })
+        .finally(() => {
+          this.resolvingNewsTableNamePromise = null;
+        });
+    }
+
+    return this.resolvingNewsTableNamePromise;
+  }
+
+  private async lookupNewsTableName(): Promise<string> {
+    for (const schema of NEWS_SCHEMA_CANDIDATES) {
+      const candidateTableName = buildQualifiedTableName(schema, NEWS_TABLE_NAME);
+
+      try {
+        await pool.query(`SELECT 1 AS ok FROM ${candidateTableName} LIMIT 1`);
+        return candidateTableName;
+      } catch (error) {
+        if (!isMissingTableError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    const defaultTableName = buildQualifiedTableName(null, NEWS_TABLE_NAME);
+    try {
+      await pool.query(`SELECT 1 AS ok FROM ${defaultTableName} LIMIT 1`);
+      return defaultTableName;
+    } catch (error) {
+      if (!isMissingTableError(error)) {
+        throw error;
+      }
+    }
+
+    throw new Error(
+      `Unable to find ${NEWS_TABLE_NAME}. Checked schemas: ${NEWS_SCHEMA_CANDIDATES.join(", ") || "(none)"}.`
+    );
+  }
+
   async getInsights(): Promise<BtcNewsInsightsResponse> {
+    const newsTableName = await this.resolveNewsTableName();
     const [summaryRows, dominantTopicRows, topArticleRows, topicBreakdownRows, actionBreakdownRows] = await Promise.all([
       pool.query<SummaryRow[]>(
         `
           SELECT
-            COALESCE(SUM(CASE WHEN created_at >= NOW() - INTERVAL 1 HOUR THEN COALESCE(weighted_score, 0) ELSE 0 END), 0) AS bias_1h,
-            COALESCE(SUM(CASE WHEN created_at >= NOW() - INTERVAL 6 HOUR THEN COALESCE(weighted_score, 0) ELSE 0 END), 0) AS bias_6h,
-            COALESCE(SUM(CASE WHEN created_at >= NOW() - INTERVAL 24 HOUR THEN COALESCE(weighted_score, 0) ELSE 0 END), 0) AS bias_24h,
-            COALESCE(SUM(CASE WHEN created_at >= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END), 0) AS total_items_24h,
-            COALESCE(SUM(CASE WHEN created_at >= NOW() - INTERVAL 24 HOUR AND LOWER(COALESCE(sentiment, '')) = 'bullish' THEN 1 ELSE 0 END), 0) AS bullish_count_24h,
-            COALESCE(SUM(CASE WHEN created_at >= NOW() - INTERVAL 24 HOUR AND LOWER(COALESCE(sentiment, '')) = 'bearish' THEN 1 ELSE 0 END), 0) AS bearish_count_24h,
-            COALESCE(SUM(CASE WHEN created_at >= NOW() - INTERVAL 24 HOUR AND LOWER(COALESCE(sentiment, '')) = 'neutral' THEN 1 ELSE 0 END), 0) AS neutral_count_24h
-          FROM ${NEWS_TABLE}
+            COALESCE(SUM(CASE WHEN ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 1 HOUR THEN COALESCE(weighted_score, 0) ELSE 0 END), 0) AS bias_1h,
+            COALESCE(SUM(CASE WHEN ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 6 HOUR THEN COALESCE(weighted_score, 0) ELSE 0 END), 0) AS bias_6h,
+            COALESCE(SUM(CASE WHEN ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR THEN COALESCE(weighted_score, 0) ELSE 0 END), 0) AS bias_24h,
+            COALESCE(SUM(CASE WHEN ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END), 0) AS total_items_24h,
+            COALESCE(SUM(CASE WHEN ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR AND LOWER(COALESCE(sentiment, '')) = 'bullish' THEN 1 ELSE 0 END), 0) AS bullish_count_24h,
+            COALESCE(SUM(CASE WHEN ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR AND LOWER(COALESCE(sentiment, '')) = 'bearish' THEN 1 ELSE 0 END), 0) AS bearish_count_24h,
+            COALESCE(SUM(CASE WHEN ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR AND LOWER(COALESCE(sentiment, '')) = 'neutral' THEN 1 ELSE 0 END), 0) AS neutral_count_24h
+          FROM ${newsTableName}
         `
       ),
       pool.query<DominantTopicRow[]>(
         `
           SELECT COALESCE(NULLIF(TRIM(topic), ''), 'uncategorized') AS topic
-          FROM ${NEWS_TABLE}
-          WHERE created_at >= NOW() - INTERVAL 24 HOUR
+          FROM ${newsTableName}
+          WHERE ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR
           GROUP BY COALESCE(NULLIF(TRIM(topic), ''), 'uncategorized')
           ORDER BY COUNT(*) DESC, ABS(SUM(COALESCE(weighted_score, 0))) DESC, topic ASC
           LIMIT 1
@@ -189,10 +269,10 @@ export class BtcNewsInsightsService {
             why_it_matters,
             raw_summary,
             created_at
-          FROM ${NEWS_TABLE}
-          WHERE created_at >= NOW() - INTERVAL 24 HOUR
-          ORDER BY ABS(COALESCE(weighted_score, 0)) DESC, COALESCE(published_at, created_at) DESC
-          LIMIT 5
+          FROM ${newsTableName}
+          WHERE ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR
+          ORDER BY ${NEWS_EVENT_TIME_SQL} DESC, ABS(COALESCE(weighted_score, 0)) DESC
+          LIMIT 12
         `
       ),
       pool.query<TopicBreakdownRow[]>(
@@ -201,8 +281,8 @@ export class BtcNewsInsightsService {
             COALESCE(NULLIF(TRIM(topic), ''), 'uncategorized') AS topic,
             COUNT(*) AS count,
             COALESCE(SUM(COALESCE(weighted_score, 0)), 0) AS total_weighted_score
-          FROM ${NEWS_TABLE}
-          WHERE created_at >= NOW() - INTERVAL 24 HOUR
+          FROM ${newsTableName}
+          WHERE ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR
           GROUP BY COALESCE(NULLIF(TRIM(topic), ''), 'uncategorized')
           ORDER BY count DESC, ABS(total_weighted_score) DESC, topic ASC
         `
@@ -213,8 +293,8 @@ export class BtcNewsInsightsService {
             COALESCE(SUM(CASE WHEN LOWER(COALESCE(action_bias, '')) = 'buy' THEN 1 ELSE 0 END), 0) AS buy_count,
             COALESCE(SUM(CASE WHEN LOWER(COALESCE(action_bias, '')) = 'sell' THEN 1 ELSE 0 END), 0) AS sell_count,
             COALESCE(SUM(CASE WHEN LOWER(COALESCE(action_bias, '')) = 'hold' THEN 1 ELSE 0 END), 0) AS hold_count
-          FROM ${NEWS_TABLE}
-          WHERE created_at >= NOW() - INTERVAL 24 HOUR
+          FROM ${newsTableName}
+          WHERE ${NEWS_EVENT_TIME_SQL} >= NOW() - INTERVAL 24 HOUR
         `
       ),
     ]);

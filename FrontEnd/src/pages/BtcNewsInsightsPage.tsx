@@ -139,12 +139,15 @@ function SummaryTile({
 }
 
 function ArticleCard({ article }: { article: BtcNewsInsightArticle }) {
+  const articleTimestamp = article.published_at ?? article.created_at;
+  const articleLink = article.url.trim();
+
   return (
     <article className="rounded-xl border border-border bg-card p-5 animate-fade-up">
       <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
         <span>{article.source}</span>
         <span className="text-border">•</span>
-        <span>{formatPublishedAt(article.published_at)}</span>
+        <span>{formatPublishedAt(articleTimestamp)}</span>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -166,7 +169,7 @@ function ArticleCard({ article }: { article: BtcNewsInsightArticle }) {
 
       <div className="mt-4 space-y-3 text-sm text-muted-foreground">
         <div>
-          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Context</div>
+          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">AI Summary</div>
           <p className="mt-1 leading-6 text-foreground/90">{article.ai_summary ?? article.raw_summary ?? "No AI summary available yet."}</p>
         </div>
         <div>
@@ -180,15 +183,21 @@ function ArticleCard({ article }: { article: BtcNewsInsightArticle }) {
           <span>{article.action_bias ? `Bias ${article.action_bias}` : "Bias n/a"}</span>
           <span>{article.time_horizon ? `Horizon ${article.time_horizon}` : "Horizon n/a"}</span>
         </div>
-        <a
-          href={article.url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-mono text-foreground transition-colors hover:border-primary/30 hover:bg-secondary/40"
-        >
-          Open Article
-          <ArrowUpRight className="h-3.5 w-3.5" />
-        </a>
+        {articleLink ? (
+          <a
+            href={articleLink}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-mono text-foreground transition-colors hover:border-primary/30 hover:bg-secondary/40"
+          >
+            Open Article
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </a>
+        ) : (
+          <span className="inline-flex items-center rounded-md border border-border px-3 py-2 text-xs font-mono text-muted-foreground">
+            Source unavailable
+          </span>
+        )}
       </div>
     </article>
   );
@@ -263,7 +272,7 @@ function EmptyState() {
       </div>
       <h3 className="mt-4 text-lg font-mono font-semibold text-foreground">No BTC news insights yet</h3>
       <p className="mx-auto mt-2 max-w-2xl text-sm text-muted-foreground">
-        This pane will populate after the n8n workflow stores processed BTC news items in MySQL.
+        This feed will populate after the n8n workflow stores processed BTC news items and AI summaries in MySQL.
       </p>
     </div>
   );
@@ -506,7 +515,7 @@ export function BtcNewsInsightsPage() {
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Newspaper className="h-4 w-4 text-muted-foreground" />
-          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Top Contributing Articles</div>
+          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">AI News Feed</div>
         </div>
         <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
           {insights.top_articles.map((article) => (
