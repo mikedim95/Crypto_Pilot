@@ -1,10 +1,17 @@
 import { StrategyRepository } from "./strategy-repository.js";
 import { StrategyJobService } from "./strategy-job-service.js";
 import { StrategyRunner } from "./strategy-runner.js";
+import type { PortfolioAccountType } from "./types.js";
+
+function resolveScheduledAccountType(): PortfolioAccountType {
+  return String(process.env.STRATEGY_SCHEDULE_ACCOUNT_TYPE ?? "demo").toLowerCase() === "real" ? "real" : "demo";
+}
 
 export class StrategyScheduler {
   private timer: NodeJS.Timeout | null = null;
   private runningTick = false;
+  private started = false;
+  private readonly scheduledAccountType = resolveScheduledAccountType();
 
   constructor(
     private readonly repository: StrategyRepository,
@@ -13,25 +20,42 @@ export class StrategyScheduler {
     private readonly pollIntervalMs = 15_000
   ) {}
 
+  private scheduleNextTick(delayMs = this.pollIntervalMs): void {
+    if (!this.started) {
+      return;
+    }
+
+    this.timer = setTimeout(() => {
+      void this.loop();
+    }, Math.max(0, delayMs));
+  }
+
+  private async loop(): Promise<void> {
+    if (!this.started) {
+      return;
+    }
+
+    try {
+      await this.tick();
+    } finally {
+      this.scheduleNextTick();
+    }
+  }
+
   async start(): Promise<void> {
     await this.repository.init();
-    if (this.timer) return;
+    if (this.started) return;
 
-    const loop = async () => {
-      try {
-        await this.tick();
-      } finally {
-        this.timer = setTimeout(loop, this.pollIntervalMs);
-      }
-    };
-
-    this.timer = setTimeout(loop, this.pollIntervalMs);
+    this.started = true;
+    this.scheduleNextTick(0);
   }
 
   stop(): void {
-    if (!this.timer) return;
-    clearTimeout(this.timer);
-    this.timer = null;
+    this.started = false;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
   }
 
   async tick(): Promise<void> {
@@ -47,12 +71,12 @@ export class StrategyScheduler {
         const dueProfiles = await this.repository.listDueRebalanceAllocationProfiles(nowIso, scope);
 
         for (const strategy of dueStrategies) {
-          if (this.runner.isRunning(strategy.id, "real", scope)) {
+          if (this.runner.isRunning(strategy.id, this.scheduledAccountType, scope)) {
             continue;
           }
 
           try {
-            await this.runner.runStrategy(strategy.id, "schedule", "real", scope);
+            await this.runner.runStrategy(strategy.id, "schedule", this.scheduledAccountType, scope);
           } catch (error) {
             console.error(
               `[strategy-scheduler] user=${scope.username ?? scope.userId} strategy=${strategy.id} failed:`,
