@@ -3,10 +3,11 @@ import { Bot, CircleDot, PieChart as PieChartIcon, Wallet } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { AssetRow } from "@/components/AssetRow";
 import { AssetDetailsDialog } from "@/components/AssetDetailsDialog";
+import { PortfolioTradeDialogs } from "@/components/portfolio/PortfolioTradeDialogs";
 import { SpinnerValue } from "@/components/SpinnerValue";
-import { useBotProfiles, useDashboardData } from "@/hooks/useTradingData";
+import { useBotProfiles, useDashboardData, useTradingAssets } from "@/hooks/useTradingData";
 import { cn } from "@/lib/utils";
-import type { Asset, BotProfile, PortfolioAccountType } from "@/types/api";
+import type { Asset, BotProfile, PortfolioAccountType, TradingAssetAvailability } from "@/types/api";
 
 interface PortfolioPageProps {
   accountType: PortfolioAccountType;
@@ -37,6 +38,7 @@ interface AllocationBucket {
 
 const EMPTY_ASSETS: Asset[] = [];
 const EMPTY_BOT_PROFILES: BotProfile[] = [];
+const EMPTY_TRADING_ASSETS: TradingAssetAvailability[] = [];
 const STABLE_COINS = new Set(["USDC", "USDT", "BUSD", "FDUSD", "TUSD", "DAI"]);
 const BUCKET_COLORS = [
   "hsl(168, 100%, 48%)",
@@ -59,6 +61,21 @@ function formatUsd(value: number): string {
 
 function formatQuantity(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+function buildTradingAssetAvailabilityFallback(assets: Asset[]): TradingAssetAvailability[] {
+  return assets.map((asset) => ({
+    symbol: asset.symbol,
+    name: asset.name,
+    totalAmount: asset.balance,
+    reservedAmount: 0,
+    freeAmount: asset.balance,
+    lockedAmount: 0,
+    priceUsd: asset.price,
+    totalValueUsd: asset.value,
+    reservedValueUsd: 0,
+    freeValueUsd: asset.value,
+  }));
 }
 
 function buildAllocationBuckets(
@@ -236,6 +253,7 @@ function AllocationTooltip({
 export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps) {
   const { data, isPending, error } = useDashboardData(accountType);
   const { data: botProfilesData } = useBotProfiles(accountType === "demo");
+  const { data: tradingAssetsData } = useTradingAssets(accountType);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [selectedBucketId, setSelectedBucketId] = useState<string>("");
   const isLoading = isPending && !data;
@@ -243,6 +261,15 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
 
   const assets = data?.assets ?? EMPTY_ASSETS;
   const botProfiles = botProfilesData?.profiles ?? EMPTY_BOT_PROFILES;
+  const tradingAssets = useMemo(
+    () =>
+      tradingAssetsData?.assets && tradingAssetsData.assets.length > 0
+        ? tradingAssetsData.assets
+        : assets.length > 0
+          ? buildTradingAssetAvailabilityFallback(assets)
+          : EMPTY_TRADING_ASSETS,
+    [assets, tradingAssetsData?.assets]
+  );
 
   const allocationBuckets = useMemo(
     () => buildAllocationBuckets(accountType, assets, botProfiles),
@@ -286,7 +313,7 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
             <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Total Value</div>
             <SpinnerValue
               loading={isLoading}
-              value={data ? fmtUsd(data.totalPortfolioValue) : undefined}
+              value={data ? formatUsd(data.totalPortfolioValue) : undefined}
               className="mt-2 text-lg md:text-xl font-mono font-semibold text-foreground"
             />
           </div>
@@ -297,7 +324,7 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
               loading={isLoading}
               value={
                 data
-                  ? `${data.portfolioChange24hValue >= 0 ? "+" : ""}${fmtUsd(data.portfolioChange24hValue)}`
+                  ? `${data.portfolioChange24hValue >= 0 ? "+" : ""}${formatUsd(data.portfolioChange24hValue)}`
                   : undefined
               }
               className={`mt-2 text-lg md:text-xl font-mono font-semibold ${data && data.portfolioChange24hValue < 0 ? "text-negative" : "text-positive"}`}
@@ -322,7 +349,7 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
             <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Top Position</div>
             <SpinnerValue
               loading={isLoading}
-              value={topPosition ? `${topPosition.symbol} ${fmtUsd(topPosition.value)}` : undefined}
+              value={topPosition ? `${topPosition.symbol} ${formatUsd(topPosition.value)}` : undefined}
               className="mt-2 text-lg md:text-xl font-mono font-semibold text-foreground"
             />
           </div>
@@ -593,6 +620,12 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
             </div>
           ) : null}
         </div>
+
+        <PortfolioTradeDialogs
+          accountType={accountType}
+          portfolioAssets={assets}
+          tradingAssets={tradingAssets}
+        />
 
         {error && !data ? (
           <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">

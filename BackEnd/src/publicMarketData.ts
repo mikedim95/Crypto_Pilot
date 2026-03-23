@@ -43,6 +43,8 @@ const ASSET_METADATA: Record<string, { name: string; marketCap: number }> = {
   TRX: { name: "TRON", marketCap: 12_000_000_000 },
   DOT: { name: "Polkadot", marketCap: 10_000_000_000 },
   ATOM: { name: "Cosmos", marketCap: 4_000_000_000 },
+  USD: { name: "US Dollar", marketCap: 0 },
+  EUR: { name: "Euro", marketCap: 0 },
   USDT: { name: "Tether", marketCap: 110_000_000_000 },
   USDC: { name: "USD Coin", marketCap: 35_000_000_000 },
 };
@@ -277,6 +279,54 @@ async function fetchProductTicker(baseSymbol: string, quoteSymbol: string): Prom
 
 async function fetchUsdSnapshot(symbol: string): Promise<AssetUsdSnapshot> {
   const normalizedSymbol = normalizeSymbol(symbol);
+  if (normalizedSymbol === "USD") {
+    return {
+      price: 1,
+      change24h: 0,
+      volume24h: 0,
+      referenceQuote: "USD",
+    };
+  }
+
+  if (normalizedSymbol === "EUR") {
+    const cacheKey = "EUR:usd";
+    const cached = getTimedCacheValue(usdSnapshotCache, cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    for (const baseSymbol of ["BTC", "ETH"] as const) {
+      try {
+        const [usdTicker, eurTicker] = await Promise.all([
+          fetchProductTicker(baseSymbol, "USD"),
+          fetchProductTicker(baseSymbol, "EUR"),
+        ]);
+        const price = eurTicker.last > 0 ? usdTicker.last / eurTicker.last : 0;
+        const open24h =
+          usdTicker.open24h > 0 && eurTicker.open24h > 0 ? usdTicker.open24h / eurTicker.open24h : 0;
+        const change24h = open24h > 0 ? ((price - open24h) / open24h) * 100 : 0;
+
+        if (price > 0) {
+          return setTimedCacheValue(
+            usdSnapshotCache,
+            cacheKey,
+            {
+              price: round(price, 8),
+              change24h: round(change24h, 4),
+              volume24h: 0,
+              referenceQuote: "USD",
+            },
+            TICKER_CACHE_TTL_MS
+          );
+        }
+      } catch {
+        // Try the next cross source.
+      }
+    }
+
+    throw new Error("No public USD market is available for EUR.");
+  }
+
   if (STABLE_COINS.has(normalizedSymbol)) {
     return {
       price: 1,

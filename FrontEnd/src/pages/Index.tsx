@@ -5,7 +5,6 @@ import { TopBar } from "@/components/TopBar";
 import { ProfileModal } from "@/components/ProfileModal";
 import { ComingSoonPage } from "@/components/ComingSoonPage";
 import { PortfolioPage } from "@/pages/PortfolioPage";
-import { TradingPage } from "@/pages/TradingPage";
 import { ExchangeIntelligencePage } from "@/pages/ExchangeIntelligencePage";
 import { ExecutionSimulatorPage } from "@/pages/ExecutionSimulatorPage";
 import { AsicMinersPage } from "@/pages/AsicMinersPage";
@@ -74,8 +73,6 @@ const Index = ({ session, onLogout }: IndexProps) => {
     switch (currentPage) {
       case "portfolio":
         return <PortfolioPage accountType={accountType} />;
-      case "trading":
-        return <TradingPage accountType={accountType} />;
       case "exchange-intelligence":
         return <ExchangeIntelligencePage />;
       case "execution-simulator":

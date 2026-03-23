@@ -26,7 +26,6 @@ interface SidebarProps {
 
 const navItems = [
   { id: "portfolio", label: "Portfolio", icon: Briefcase },
-  { id: "trading", label: "Trading", icon: ClipboardList },
   { id: "exchange-intelligence", label: "Exchange Intel", icon: ArrowLeftRight },
   { id: "execution-simulator", label: "Execution Sim", icon: PlaySquare },
   { id: "strategies", label: "Strategies", icon: Bot },

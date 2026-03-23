@@ -1,11 +1,14 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
 import { z } from "zod";
+import type { ExchangeId } from "../services/exchanges/types.js";
 import { resolveStrategyUserScope } from "../strategy/strategy-user-scope.js";
 import { TradingService } from "./trading-service.js";
 
 const accountTypeSchema = z.enum(["real", "demo"]);
 const amountModeSchema = z.enum(["selling_asset", "buying_asset", "buying_asset_usdt"]);
+const exchangeSchema = z.enum(["kraken", "coinbase", "crypto.com"] satisfies [ExchangeId, ...ExchangeId[]]);
+const fiatCurrencySchema = z.enum(["USD", "EUR"]);
 
 const tradeRequestSchema = z.object({
   accountType: accountTypeSchema.optional(),
@@ -13,6 +16,8 @@ const tradeRequestSchema = z.object({
   sellingAsset: z.string().trim().min(2).max(20),
   amountMode: amountModeSchema,
   amount: z.number().finite().positive(),
+  exchange: exchangeSchema.optional(),
+  fiatCurrency: fiatCurrencySchema.optional(),
 });
 
 interface TradingApiDeps {

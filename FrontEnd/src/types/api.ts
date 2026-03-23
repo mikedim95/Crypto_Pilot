@@ -342,6 +342,7 @@ export interface TradingAssetsResponse {
 }
 
 export type TradingAmountMode = "selling_asset" | "buying_asset" | "buying_asset_usdt";
+export type TradingFiatCurrency = "USD" | "EUR";
 
 export interface TradingTransactionRequest {
   accountType?: PortfolioAccountType;
@@ -349,6 +350,8 @@ export interface TradingTransactionRequest {
   sellingAsset: string;
   amountMode: TradingAmountMode;
   amount: number;
+  exchange?: ExchangeId;
+  fiatCurrency?: TradingFiatCurrency;
 }
 
 export interface TradePreviewResponse {
@@ -356,10 +359,19 @@ export interface TradePreviewResponse {
   buyingAsset: TradingAssetAvailability;
   sellingAsset: TradingAssetAvailability;
   amountMode: TradingAmountMode;
+  exchange: ExchangeId | null;
+  fiatCurrency: TradingFiatCurrency;
+  tradedAssetSymbol: string;
+  tradedAssetName: string;
+  settlementAssetSymbol: string;
+  settlementAssetName: string;
   requestedAmount: number;
   buyAmount: number;
   sellAmount: number;
   buyWorthUsdt: number;
+  buyWorthFiat: number;
+  priceInFiat: number;
+  fiatUsdRate: number;
   priceInSellingAsset: number;
   inversePrice: number;
   pricingSource: "direct" | "inverse" | "usd_cross";
@@ -368,6 +380,7 @@ export interface TradePreviewResponse {
   executable: boolean;
   warnings: string[];
   blockingReasons: string[];
+  marketTimestamp: string | null;
   generatedAt: string;
 }
 
