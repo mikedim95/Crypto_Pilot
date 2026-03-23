@@ -756,6 +756,10 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
       <AssetDetailsDialog
         asset={selectedAsset}
         open={Boolean(selectedAsset)}
+        accountType={accountType}
+        portfolioTotalValue={data?.totalPortfolioValue ?? 0}
+        tradingAssets={tradingAssets}
+        recentActivity={data?.recentActivity ?? []}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedAsset(null);
