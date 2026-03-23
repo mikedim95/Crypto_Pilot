@@ -215,10 +215,11 @@ export function useFleetLive() {
   });
 }
 
-export function useBotProfiles() {
+export function useBotProfiles(enabled = true) {
   return useQuery({
     queryKey: ["bot-profiles"],
     queryFn: backendApi.getBots,
+    enabled,
     staleTime: 5_000,
     refetchInterval: 15_000,
     retry: 1,
