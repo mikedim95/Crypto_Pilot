@@ -36,6 +36,20 @@ interface AllocationBucket {
   assets: AllocationBucketAsset[];
 }
 
+interface AllocationAssetSegment {
+  id: string;
+  bucketId: string;
+  bucketName: string;
+  bucketKind: AllocationBucket["kind"];
+  asset: Asset | null;
+  symbol: string;
+  name: string;
+  value: number;
+  bucketAllocation: number;
+  portfolioAllocation: number;
+  color: string;
+}
+
 const EMPTY_ASSETS: Asset[] = [];
 const EMPTY_BOT_PROFILES: BotProfile[] = [];
 const EMPTY_TRADING_ASSETS: TradingAssetAvailability[] = [];
@@ -61,6 +75,15 @@ function formatUsd(value: number): string {
 
 function formatQuantity(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+function assetColorFromSymbol(symbol: string): string {
+  const normalized = symbol.trim().toUpperCase();
+  const hash = Array.from(normalized).reduce((sum, char, index) => sum + char.charCodeAt(0) * (index + 1), 0);
+  const hue = hash % 360;
+  const saturation = 68 + (hash % 16);
+  const lightness = 54 + (hash % 8);
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 
 function buildTradingAssetAvailabilityFallback(assets: Asset[]): TradingAssetAvailability[] {
@@ -230,15 +253,62 @@ function buildAllocationBuckets(
   return buckets.sort((left, right) => right.value - left.value);
 }
 
+function buildAllocationAssetSegments(buckets: AllocationBucket[]): AllocationAssetSegment[] {
+  return buckets.flatMap((bucket) =>
+    bucket.assets
+      .filter((asset) => asset.value > 0)
+      .map((asset) => ({
+        id: `${bucket.id}-${asset.symbol}`,
+        bucketId: bucket.id,
+        bucketName: bucket.name,
+        bucketKind: bucket.kind,
+        asset: asset.asset,
+        symbol: asset.symbol,
+        name: asset.name,
+        value: asset.value,
+        bucketAllocation: asset.bucketAllocation,
+        portfolioAllocation: asset.portfolioAllocation,
+        color: assetColorFromSymbol(asset.symbol),
+      }))
+  );
+}
+
+function isAllocationAssetSegment(payload: AllocationBucket | AllocationAssetSegment): payload is AllocationAssetSegment {
+  return "bucketId" in payload;
+}
+
 function AllocationTooltip({
   active,
   payload,
 }: {
   active?: boolean;
-  payload?: Array<{ payload?: AllocationBucket }>;
+  payload?: Array<{ payload?: AllocationBucket | AllocationAssetSegment }>;
 }) {
-  const bucket = payload?.[0]?.payload;
-  if (!active || !bucket) return null;
+  const hoveredItem = payload?.[0]?.payload;
+  if (!active || !hoveredItem) return null;
+
+  if (isAllocationAssetSegment(hoveredItem)) {
+    return (
+      <div className="rounded-lg border border-border bg-card/95 px-3 py-2 shadow-xl backdrop-blur">
+        <div className="flex items-center gap-2 text-xs font-mono text-foreground">
+          <span
+            className="h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: hoveredItem.color }}
+          />
+          <span>{hoveredItem.symbol}</span>
+          <span className="text-muted-foreground">inside {hoveredItem.bucketName}</span>
+        </div>
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          {formatUsd(hoveredItem.value)} | {hoveredItem.bucketAllocation.toFixed(2)}% of slice
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          {hoveredItem.portfolioAllocation.toFixed(2)}% of portfolio
+        </div>
+      </div>
+    );
+  }
+
+  const bucket = hoveredItem;
 
   return (
     <div className="rounded-lg border border-border bg-card/95 px-3 py-2 shadow-xl backdrop-blur">
@@ -274,6 +344,10 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
   const allocationBuckets = useMemo(
     () => buildAllocationBuckets(accountType, assets, botProfiles),
     [accountType, assets, botProfiles]
+  );
+  const allocationAssetSegments = useMemo(
+    () => buildAllocationAssetSegments(allocationBuckets),
+    [allocationBuckets]
   );
   const selectedBucket =
     allocationBuckets.find((bucket) => bucket.id === selectedBucketId) ?? allocationBuckets[0] ?? null;
@@ -361,7 +435,7 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
               <div>
                 <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Allocation Destinations</div>
                 <div className="mt-2 text-sm text-muted-foreground">
-                  See exactly how the portfolio is split between direct holdings and active bots. Click any slice to inspect its assets.
+                  The inner ring shows the bucket split. The outer ring breaks each bucket into the exact assets sitting inside it.
                 </div>
               </div>
               <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/30 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
@@ -384,11 +458,34 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
+                        data={allocationAssetSegments}
+                        dataKey="value"
+                        nameKey="symbol"
+                        innerRadius={122}
+                        outerRadius={148}
+                        paddingAngle={1}
+                        stroke="hsl(var(--background))"
+                        strokeWidth={2}
+                        onClick={(entry) => {
+                          const segment = entry as AllocationAssetSegment;
+                          setSelectedBucketId(segment.bucketId);
+                        }}
+                      >
+                        {allocationAssetSegments.map((segment) => (
+                          <Cell
+                            key={segment.id}
+                            fill={segment.color}
+                            fillOpacity={selectedBucket?.id === segment.bucketId ? 0.98 : 0.46}
+                            style={{ cursor: "pointer" }}
+                          />
+                        ))}
+                      </Pie>
+                      <Pie
                         data={allocationBuckets}
                         dataKey="value"
                         nameKey="name"
                         innerRadius={78}
-                        outerRadius={118}
+                        outerRadius={112}
                         paddingAngle={3}
                         stroke="hsl(var(--background))"
                         strokeWidth={3}
@@ -455,6 +552,28 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
                       </button>
                     );
                   })}
+                  {selectedBucket ? (
+                    <div className="rounded-xl border border-border bg-secondary/15 p-4">
+                      <div className="text-[10px] font-mono uppercase tracking-[0.22em] text-muted-foreground">
+                        Asset Ring For {selectedBucket.name}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedBucket.assets.map((asset) => (
+                          <div
+                            key={`${selectedBucket.id}-legend-${asset.symbol}`}
+                            className="inline-flex items-center gap-2 rounded-full border border-border bg-background/50 px-3 py-1.5"
+                          >
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: assetColorFromSymbol(asset.symbol) }}
+                            />
+                            <span className="text-[11px] font-mono text-foreground">{asset.symbol}</span>
+                            <span className="text-[11px] text-muted-foreground">{asset.bucketAllocation.toFixed(2)}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             )}
@@ -529,7 +648,7 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
                             <div className="flex items-center gap-3">
                               <div
                                 className="flex h-8 w-8 items-center justify-center rounded-md bg-secondary"
-                                style={{ boxShadow: `inset 0 0 0 1px ${selectedBucket.color}` }}
+                                style={{ boxShadow: `inset 0 0 0 1px ${assetColorFromSymbol(bucketAsset.symbol)}` }}
                               >
                                 <span className="text-xs font-mono font-semibold text-foreground">
                                   {bucketAsset.symbol.slice(0, 2)}
