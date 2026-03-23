@@ -13,15 +13,6 @@ import {
   type SignalAction,
 } from "./signal-review-service.js";
 
-const MIN_CONFIDENCE_THRESHOLD = clampConfidence(process.env.EXECUTION_GUARDRAIL_MIN_CONFIDENCE, 0.55);
-const MAX_POSITION_SIZE_PCT = clampPercent(process.env.EXECUTION_GUARDRAIL_MAX_POSITION_SIZE_PCT, 25);
-const MAX_BTC_EXPOSURE_PCT = clampPercent(process.env.EXECUTION_GUARDRAIL_MAX_BTC_EXPOSURE_PCT, 55);
-const COOLDOWN_MINUTES = clampPositive(process.env.EXECUTION_GUARDRAIL_COOLDOWN_MINUTES, 60);
-const MAX_DAILY_TURNOVER_PCT = clampPercent(process.env.EXECUTION_GUARDRAIL_MAX_DAILY_TURNOVER_PCT, 75);
-const NEWS_SHOCK_BEARISH_BIAS = clampSigned(process.env.EXECUTION_GUARDRAIL_NEWS_SHOCK_BEARISH_BIAS, -6);
-const VOLATILITY_LOCKOUT_THRESHOLD = clampPositive(process.env.EXECUTION_GUARDRAIL_VOLATILITY_LOCKOUT, 0.08);
-const MILD_REDUCTION_FACTOR = clampReduction(process.env.EXECUTION_GUARDRAIL_MILD_REDUCTION_FACTOR, 0.5);
-
 export interface ExecutionGuardrailEvaluationRequest {
   accountType?: PortfolioAccountType;
   proposedAction: SignalAction;
@@ -46,46 +37,6 @@ export interface ExecutionGuardrailEvaluationResponse {
 function round(value: number, digits = 2): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
-}
-
-function clampPercent(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.max(0, Math.min(100, parsed));
-}
-
-function clampConfidence(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.max(0, Math.min(1, parsed));
-}
-
-function clampPositive(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallback;
-  }
-  return parsed;
-}
-
-function clampReduction(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.max(0.1, Math.min(0.95, parsed));
-}
-
-function clampSigned(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return parsed;
 }
 
 function normalizeAction(value: string): SignalAction {
@@ -137,6 +88,23 @@ export class ExecutionGuardrailService {
     private readonly signalOutcomeService: SignalOutcomeService
   ) {}
 
+  async getSettings(userScope?: StrategyUserScope) {
+    return this.repository.getExecutionGuardrailSettings(userScope);
+  }
+
+  async updateSettings(settings: {
+    minConfidence?: number;
+    maxPositionSizePct?: number;
+    maxBtcExposurePct?: number;
+    cooldownMinutes?: number;
+    maxDailyTurnoverPct?: number;
+    newsShockBearishBias?: number;
+    volatilityLockoutThreshold?: number;
+    mildReductionFactor?: number;
+  }, userScope?: StrategyUserScope) {
+    return this.repository.setExecutionGuardrailSettings(settings, userScope);
+  }
+
   async evaluate(
     request: ExecutionGuardrailEvaluationRequest,
     userScope?: StrategyUserScope
@@ -152,6 +120,7 @@ export class ExecutionGuardrailService {
             this.repository.listRebalanceAllocationProfiles(userScope),
           ])
         : [undefined, undefined];
+    const guardrailSettings = await this.repository.getExecutionGuardrailSettings(userScope);
     const portfolio = await getPortfolioState(accountType, "USDC", { demoAccount, userScope, botProfiles });
     const signals = buildMarketSignalsFromPortfolio(portfolio);
     const decision = mergeDecisionContext(
@@ -194,33 +163,38 @@ export class ExecutionGuardrailService {
     }
 
     if (!blocked && action === "buy") {
-      const availablePositionRoom = Math.max(0, MAX_POSITION_SIZE_PCT - currentAssetExposure);
+      const availablePositionRoom = Math.max(0, guardrailSettings.maxPositionSizePct - currentAssetExposure);
       if (availablePositionRoom <= 0) {
         blocked = true;
         pushUnique(triggeredGuardrails, "max_position_size");
-        reasons.push(`${asset} is already at the ${MAX_POSITION_SIZE_PCT.toFixed(2)}% position cap.`);
+        reasons.push(`${asset} is already at the ${guardrailSettings.maxPositionSizePct.toFixed(2)}% position cap.`);
       } else if (adjustedSize > availablePositionRoom) {
         adjustedSize = round(availablePositionRoom, 4);
         pushUnique(triggeredGuardrails, "max_position_size");
         reasons.push(
-          `${asset} buy size was reduced to ${adjustedSize.toFixed(2)}% to stay within the ${MAX_POSITION_SIZE_PCT.toFixed(2)}% position cap.`
+          `${asset} buy size was reduced to ${adjustedSize.toFixed(2)}% to stay within the ${guardrailSettings.maxPositionSizePct.toFixed(2)}% position cap.`
         );
       }
     }
 
-    if (!blocked && action !== "hold" && decision.confidence < MIN_CONFIDENCE_THRESHOLD) {
+    if (!blocked && action !== "hold" && decision.confidence < guardrailSettings.minConfidence) {
       blocked = true;
       pushUnique(triggeredGuardrails, "min_confidence_threshold");
       reasons.push(
-        `Decision confidence ${(decision.confidence * 100).toFixed(0)}% is below the ${(MIN_CONFIDENCE_THRESHOLD * 100).toFixed(0)}% minimum threshold.`
+        `Decision confidence ${(decision.confidence * 100).toFixed(0)}% is below the ${(guardrailSettings.minConfidence * 100).toFixed(0)}% minimum threshold.`
       );
     }
 
-    if (!blocked && action === "buy" && asset === "BTC" && currentBtcExposure + adjustedSize > MAX_BTC_EXPOSURE_PCT) {
+    if (
+      !blocked &&
+      action === "buy" &&
+      asset === "BTC" &&
+      currentBtcExposure + adjustedSize > guardrailSettings.maxBtcExposurePct
+    ) {
       blocked = true;
       pushUnique(triggeredGuardrails, "max_btc_exposure");
       reasons.push(
-        `BTC exposure would rise to ${(currentBtcExposure + adjustedSize).toFixed(2)}%, above the ${MAX_BTC_EXPOSURE_PCT.toFixed(2)}% cap.`
+        `BTC exposure would rise to ${(currentBtcExposure + adjustedSize).toFixed(2)}%, above the ${guardrailSettings.maxBtcExposurePct.toFixed(2)}% cap.`
       );
     }
 
@@ -228,11 +202,11 @@ export class ExecutionGuardrailService {
       const lastActionAt = await this.signalOutcomeService.getMostRecentActionAt(asset, accountType, userScope);
       if (lastActionAt) {
         const elapsedMinutes = (Date.now() - new Date(lastActionAt).getTime()) / 60_000;
-        if (Number.isFinite(elapsedMinutes) && elapsedMinutes < COOLDOWN_MINUTES) {
+        if (Number.isFinite(elapsedMinutes) && elapsedMinutes < guardrailSettings.cooldownMinutes) {
           blocked = true;
           pushUnique(triggeredGuardrails, "cooldown_after_last_trade");
           reasons.push(
-            `${asset} is still inside the ${COOLDOWN_MINUTES.toFixed(0)} minute cooldown window after the last approved action.`
+            `${asset} is still inside the ${guardrailSettings.cooldownMinutes.toFixed(0)} minute cooldown window after the last approved action.`
           );
         }
       }
@@ -244,11 +218,11 @@ export class ExecutionGuardrailService {
         new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
         userScope
       );
-      const turnoverRoom = Math.max(0, MAX_DAILY_TURNOVER_PCT - turnoverUsed);
+      const turnoverRoom = Math.max(0, guardrailSettings.maxDailyTurnoverPct - turnoverUsed);
       if (turnoverRoom <= 0) {
         blocked = true;
         pushUnique(triggeredGuardrails, "max_daily_turnover");
-        reasons.push(`Daily turnover has already reached the ${MAX_DAILY_TURNOVER_PCT.toFixed(2)}% cap.`);
+        reasons.push(`Daily turnover has already reached the ${guardrailSettings.maxDailyTurnoverPct.toFixed(2)}% cap.`);
       } else if (adjustedSize > turnoverRoom) {
         adjustedSize = round(turnoverRoom, 4);
         pushUnique(triggeredGuardrails, "max_daily_turnover");
@@ -263,7 +237,7 @@ export class ExecutionGuardrailService {
       Math.abs(decision.news_score) >= 3 &&
       Math.sign(decision.technical_score) !== Math.sign(decision.news_score);
 
-    if (!blocked && action === "buy" && news.summary.bias_1h <= NEWS_SHOCK_BEARISH_BIAS) {
+    if (!blocked && action === "buy" && news.summary.bias_1h <= guardrailSettings.newsShockBearishBias) {
       blocked = true;
       pushUnique(triggeredGuardrails, "news_shock_lockout");
       reasons.push(
@@ -271,11 +245,11 @@ export class ExecutionGuardrailService {
       );
     }
 
-    if (!blocked && action !== "hold" && volatilityMetric >= VOLATILITY_LOCKOUT_THRESHOLD) {
+    if (!blocked && action !== "hold" && volatilityMetric >= guardrailSettings.volatilityLockoutThreshold) {
       blocked = true;
       pushUnique(triggeredGuardrails, "volatility_lockout");
       reasons.push(
-        `Observed volatility (${volatilityMetric.toFixed(4)}) is above the ${VOLATILITY_LOCKOUT_THRESHOLD.toFixed(4)} lockout threshold.`
+        `Observed volatility (${volatilityMetric.toFixed(4)}) is above the ${guardrailSettings.volatilityLockoutThreshold.toFixed(4)} lockout threshold.`
       );
     }
 
@@ -298,7 +272,7 @@ export class ExecutionGuardrailService {
     }
 
     if (!blocked && action === "buy" && decision.recommendation === "mild_buy_favorable") {
-      const reducedSize = round(adjustedSize * MILD_REDUCTION_FACTOR, 4);
+      const reducedSize = round(adjustedSize * guardrailSettings.mildReductionFactor, 4);
       if (reducedSize < adjustedSize) {
         adjustedSize = reducedSize;
         pushUnique(triggeredGuardrails, "mild_environment_size_reduction");
@@ -309,7 +283,7 @@ export class ExecutionGuardrailService {
     }
 
     if (!blocked && action === "sell" && decision.recommendation === "mild_sell_favorable") {
-      const reducedSize = round(adjustedSize * MILD_REDUCTION_FACTOR, 4);
+      const reducedSize = round(adjustedSize * guardrailSettings.mildReductionFactor, 4);
       if (reducedSize < adjustedSize) {
         adjustedSize = reducedSize;
         pushUnique(triggeredGuardrails, "mild_environment_size_reduction");

@@ -70,6 +70,15 @@ export function useDecisionIntelligence(accountType: PortfolioAccountType = "rea
   });
 }
 
+export function useExecutionGuardrailSettings() {
+  return useQuery({
+    queryKey: ["execution-guardrail-settings"],
+    queryFn: backendApi.getExecutionGuardrailSettings,
+    staleTime: 10_000,
+    retry: 1,
+  });
+}
+
 export function useSignalReview(accountType: PortfolioAccountType = "real", limit = 25) {
   return useQuery({
     queryKey: ["signal-review", accountType, limit],

@@ -34,6 +34,21 @@ const decisionContextSchema = z
   })
   .partial();
 
+const executionGuardrailSettingsSchema = z.object({
+  minConfidence: z.number().min(0).max(1),
+  maxPositionSizePct: z.number().min(0).max(100),
+  maxBtcExposurePct: z.number().min(0).max(100),
+  cooldownMinutes: z.number().positive(),
+  maxDailyTurnoverPct: z.number().min(0).max(100),
+  newsShockBearishBias: z.number().finite(),
+  volatilityLockoutThreshold: z.number().positive(),
+  mildReductionFactor: z.number().min(0.1).max(0.95),
+});
+const executionGuardrailSettingsUpdateSchema = executionGuardrailSettingsSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  "At least one execution guardrail setting is required."
+);
+
 const guardrailRequestSchema = z.object({
   accountType: accountTypeSchema.optional(),
   proposedAction: actionSchema,
@@ -84,6 +99,42 @@ function parseLimit(value: unknown, fallback = 25): number {
 
 export function createExecutionRouter(deps: ExecutionApiDeps): Router {
   const router = Router();
+
+  router.get("/execution/guardrails/settings", async (req, res, next) => {
+    try {
+      const userScope = requireUserScope(req, res);
+      if (!userScope) {
+        return;
+      }
+
+      const settings = await deps.executionGuardrailService.getSettings(userScope);
+      res.json({ settings });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put("/execution/guardrails/settings", async (req, res, next) => {
+    try {
+      const userScope = requireUserScope(req, res);
+      if (!userScope) {
+        return;
+      }
+
+      const parsedBody = executionGuardrailSettingsUpdateSchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        res.status(400).json({
+          message: parsedBody.error.issues[0]?.message ?? "Invalid execution guardrail settings payload.",
+        });
+        return;
+      }
+
+      const settings = await deps.executionGuardrailService.updateSettings(parsedBody.data, userScope);
+      res.json({ settings });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.post("/execution/guardrails/evaluate", async (req, res, next) => {
     try {

@@ -511,6 +511,21 @@ export interface ExecutionGuardrailEvaluationResponse {
   triggered_guardrails: string[];
 }
 
+export interface ExecutionGuardrailSettings {
+  minConfidence: number;
+  maxPositionSizePct: number;
+  maxBtcExposurePct: number;
+  cooldownMinutes: number;
+  maxDailyTurnoverPct: number;
+  newsShockBearishBias: number;
+  volatilityLockoutThreshold: number;
+  mildReductionFactor: number;
+}
+
+export interface ExecutionGuardrailSettingsResponse {
+  settings: ExecutionGuardrailSettings;
+}
+
 export interface SignalReviewMetricGroup {
   key: string;
   label: string;

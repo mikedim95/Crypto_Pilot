@@ -17,6 +17,8 @@ import type {
   DecisionIntelligenceResponse,
   ExecutionGuardrailEvaluationRequest,
   ExecutionGuardrailEvaluationResponse,
+  ExecutionGuardrailSettings,
+  ExecutionGuardrailSettingsResponse,
   ExecutionHistoryResponse,
   ExecutionPerformanceResponse,
   ExecutionSimulationResponse,
@@ -223,6 +225,13 @@ export const backendApi = {
   getBtcNewsInsights: () => apiRequest<BtcNewsInsightsResponse>("/api/news/btc/insights"),
   getDecisionIntelligence: (accountType: PortfolioAccountType = "real") =>
     apiRequest<DecisionIntelligenceResponse>(withQuery("/api/decision/intelligence", { accountType })),
+  getExecutionGuardrailSettings: () =>
+    apiRequest<ExecutionGuardrailSettingsResponse>("/api/execution/guardrails/settings"),
+  updateExecutionGuardrailSettings: (body: Partial<ExecutionGuardrailSettings>) =>
+    apiRequest<ExecutionGuardrailSettingsResponse>("/api/execution/guardrails/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   evaluateExecutionGuardrails: (body: ExecutionGuardrailEvaluationRequest) =>
     apiRequest<ExecutionGuardrailEvaluationResponse>("/api/execution/guardrails/evaluate", {
       method: "POST",

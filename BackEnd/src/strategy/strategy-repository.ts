@@ -8,6 +8,7 @@ import {
   BacktestStep,
   DemoAccountHolding,
   DemoAccountSettings,
+  ExecutionGuardrailSettings,
   ExecutionPlan,
   HistoricalCandle,
   RebalanceAllocationProfile,
@@ -276,6 +277,29 @@ function createDefaultDemoAccountSettings(): DemoAccountSettings {
   };
 }
 
+function createDefaultExecutionGuardrailSettings(): ExecutionGuardrailSettings {
+  const minConfidence = Number(process.env.EXECUTION_GUARDRAIL_MIN_CONFIDENCE);
+  const maxPositionSizePct = Number(process.env.EXECUTION_GUARDRAIL_MAX_POSITION_SIZE_PCT);
+  const maxBtcExposurePct = Number(process.env.EXECUTION_GUARDRAIL_MAX_BTC_EXPOSURE_PCT);
+  const maxDailyTurnoverPct = Number(process.env.EXECUTION_GUARDRAIL_MAX_DAILY_TURNOVER_PCT);
+  const newsShockBearishBias = Number(process.env.EXECUTION_GUARDRAIL_NEWS_SHOCK_BEARISH_BIAS);
+  const mildReductionFactor = Number(process.env.EXECUTION_GUARDRAIL_MILD_REDUCTION_FACTOR);
+
+  return {
+    minConfidence: Math.max(0, Math.min(1, Number.isFinite(minConfidence) ? minConfidence : 0.55)),
+    maxPositionSizePct: Math.max(0, Math.min(100, Number.isFinite(maxPositionSizePct) ? maxPositionSizePct : 25)),
+    maxBtcExposurePct: Math.max(0, Math.min(100, Number.isFinite(maxBtcExposurePct) ? maxBtcExposurePct : 55)),
+    cooldownMinutes: parsePositiveNumber(process.env.EXECUTION_GUARDRAIL_COOLDOWN_MINUTES, 60),
+    maxDailyTurnoverPct: Math.max(
+      0,
+      Math.min(100, Number.isFinite(maxDailyTurnoverPct) ? maxDailyTurnoverPct : 75)
+    ),
+    newsShockBearishBias: Number.isFinite(newsShockBearishBias) ? newsShockBearishBias : -6,
+    volatilityLockoutThreshold: parsePositiveNumber(process.env.EXECUTION_GUARDRAIL_VOLATILITY_LOCKOUT, 0.08),
+    mildReductionFactor: Math.max(0.1, Math.min(0.95, Number.isFinite(mildReductionFactor) ? mildReductionFactor : 0.5)),
+  };
+}
+
 function normalizeStrategyApprovalState(value: unknown): StrategyApprovalState {
   if (value === "testing" || value === "paper" || value === "approved" || value === "rejected") {
     return value;
@@ -437,6 +461,7 @@ const DEFAULT_STORE: StrategyStoreData = {
   backtestRuns: [],
   backtestSteps: [],
   demoAccount: createDefaultDemoAccountSettings(),
+  executionGuardrailSettings: createDefaultExecutionGuardrailSettings(),
 };
 
 function normalizeExecutionPlan(entry: Partial<ExecutionPlan>): ExecutionPlan | null {
@@ -524,6 +549,51 @@ function normalizeDemoAccountSettings(entry: unknown): DemoAccountSettings {
     updatedAt,
     seededAt,
     holdings,
+  };
+}
+
+function normalizeExecutionGuardrailSettings(entry: unknown): ExecutionGuardrailSettings {
+  const defaults = createDefaultExecutionGuardrailSettings();
+  if (!entry || typeof entry !== "object") {
+    return defaults;
+  }
+
+  const shape = entry as Partial<ExecutionGuardrailSettings>;
+  return {
+    minConfidence:
+      typeof shape.minConfidence === "number" && Number.isFinite(shape.minConfidence)
+        ? Math.max(0, Math.min(1, shape.minConfidence))
+        : defaults.minConfidence,
+    maxPositionSizePct:
+      typeof shape.maxPositionSizePct === "number" && Number.isFinite(shape.maxPositionSizePct)
+        ? Math.max(0, Math.min(100, shape.maxPositionSizePct))
+        : defaults.maxPositionSizePct,
+    maxBtcExposurePct:
+      typeof shape.maxBtcExposurePct === "number" && Number.isFinite(shape.maxBtcExposurePct)
+        ? Math.max(0, Math.min(100, shape.maxBtcExposurePct))
+        : defaults.maxBtcExposurePct,
+    cooldownMinutes:
+      typeof shape.cooldownMinutes === "number" && Number.isFinite(shape.cooldownMinutes) && shape.cooldownMinutes > 0
+        ? shape.cooldownMinutes
+        : defaults.cooldownMinutes,
+    maxDailyTurnoverPct:
+      typeof shape.maxDailyTurnoverPct === "number" && Number.isFinite(shape.maxDailyTurnoverPct)
+        ? Math.max(0, Math.min(100, shape.maxDailyTurnoverPct))
+        : defaults.maxDailyTurnoverPct,
+    newsShockBearishBias:
+      typeof shape.newsShockBearishBias === "number" && Number.isFinite(shape.newsShockBearishBias)
+        ? shape.newsShockBearishBias
+        : defaults.newsShockBearishBias,
+    volatilityLockoutThreshold:
+      typeof shape.volatilityLockoutThreshold === "number" &&
+      Number.isFinite(shape.volatilityLockoutThreshold) &&
+      shape.volatilityLockoutThreshold > 0
+        ? shape.volatilityLockoutThreshold
+        : defaults.volatilityLockoutThreshold,
+    mildReductionFactor:
+      typeof shape.mildReductionFactor === "number" && Number.isFinite(shape.mildReductionFactor)
+        ? Math.max(0.1, Math.min(0.95, shape.mildReductionFactor))
+        : defaults.mildReductionFactor,
   };
 }
 
@@ -736,6 +806,7 @@ function cloneStore(store: StrategyStoreData): StrategyStoreData {
       ...store.demoAccount,
       holdings: store.demoAccount.holdings.map((holding) => ({ ...holding })),
     },
+    executionGuardrailSettings: { ...store.executionGuardrailSettings },
   };
 }
 
@@ -776,6 +847,9 @@ function parseStore(raw: string): StrategyStoreData {
       backtestRuns: Array.isArray(parsed.backtestRuns) ? parsed.backtestRuns : [],
       backtestSteps: Array.isArray(parsed.backtestSteps) ? parsed.backtestSteps : [],
       demoAccount: normalizeDemoAccountSettings((parsed as { demoAccount?: unknown }).demoAccount),
+      executionGuardrailSettings: normalizeExecutionGuardrailSettings(
+        (parsed as { executionGuardrailSettings?: unknown }).executionGuardrailSettings
+      ),
     };
   } catch {
     return cloneStore(DEFAULT_STORE);
@@ -1339,6 +1413,7 @@ export class StrategyRepository {
       .filter((strategy): strategy is StrategyConfig => strategy !== null);
     store.strategies.forEach((strategy) => ensureStrategyVersionRecorded(store, strategy));
     store.demoAccount = normalizeDemoAccountSettings(store.demoAccount);
+    store.executionGuardrailSettings = normalizeExecutionGuardrailSettings(store.executionGuardrailSettings);
     await this.writeStoreForUser(conn, userId, store);
     this.bootstrappedUserIds.add(userId);
   }
@@ -1493,6 +1568,7 @@ export class StrategyRepository {
       .filter((strategy): strategy is StrategyConfig => strategy !== null);
     store.strategies.forEach((strategy) => ensureStrategyVersionRecorded(store, strategy));
     store.demoAccount = normalizeDemoAccountSettings(store.demoAccount);
+    store.executionGuardrailSettings = normalizeExecutionGuardrailSettings(store.executionGuardrailSettings);
     await this.writeOfflineStore(user.username, store);
     this.bootstrappedUserIds.add(user.userId);
   }
@@ -2081,6 +2157,25 @@ export class StrategyRepository {
         ...store.demoAccount,
         holdings: [],
       };
+    });
+  }
+
+  async getExecutionGuardrailSettings(scope?: StrategyUserScope): Promise<ExecutionGuardrailSettings> {
+    return this.readAfterWrites(scope, (store) => ({
+      ...normalizeExecutionGuardrailSettings(store.executionGuardrailSettings),
+    }));
+  }
+
+  async setExecutionGuardrailSettings(
+    settings: Partial<ExecutionGuardrailSettings>,
+    scope?: StrategyUserScope
+  ): Promise<ExecutionGuardrailSettings> {
+    return this.mutate(scope, (store) => {
+      store.executionGuardrailSettings = normalizeExecutionGuardrailSettings({
+        ...store.executionGuardrailSettings,
+        ...settings,
+      });
+      return { ...store.executionGuardrailSettings };
     });
   }
 

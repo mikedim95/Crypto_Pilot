@@ -124,6 +124,17 @@ export interface StrategyGuardConfig {
   cash_reserve_pct?: number;
 }
 
+export interface ExecutionGuardrailSettings {
+  minConfidence: number;
+  maxPositionSizePct: number;
+  maxBtcExposurePct: number;
+  cooldownMinutes: number;
+  maxDailyTurnoverPct: number;
+  newsShockBearishBias: number;
+  volatilityLockoutThreshold: number;
+  mildReductionFactor: number;
+}
+
 export interface StrategyMetadata {
   riskLevel?: "low" | "medium" | "high";
   expectedTurnover?: "low" | "medium" | "high";
@@ -638,4 +649,5 @@ export interface StrategyStoreData {
   backtestRuns: BacktestRun[];
   backtestSteps: BacktestStep[];
   demoAccount: DemoAccountSettings;
+  executionGuardrailSettings: ExecutionGuardrailSettings;
 }
