@@ -210,7 +210,8 @@ export function ExchangeConnectionsPage() {
               <div className="flex items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 text-primary" />
                 <div>
-                  Use a Crypto.com Exchange key with read permissions. If the key is IP-whitelisted, the backend host must be allowed.
+                  Use a Crypto.com Exchange key with read permissions. If the key is IP-whitelisted, allow the backend server's public
+                  egress IP, not the local browser or Tailscale address.
                 </div>
               </div>
             </div>

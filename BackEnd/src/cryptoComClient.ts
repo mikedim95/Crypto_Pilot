@@ -42,6 +42,16 @@ interface UserBalanceResult {
   data?: unknown;
 }
 
+// Crypto.com often returns terse auth errors; map common codes to operator-facing next steps.
+const CRYPTO_COM_ERROR_HINTS: Record<number, string> = {
+  202: "Crypto.com reports that the Exchange account is suspended.",
+  40101:
+    "Verify the Exchange API key and secret, and make sure you are using a Crypto.com Exchange API key rather than a Crypto.com App key.",
+  40102: "The backend clock is out of sync by more than 60 seconds.",
+  40103: "Whitelist the backend server's public egress IP in the Crypto.com Exchange API key settings.",
+  40104: "This account tier is not allowed to use the requested endpoint.",
+};
+
 function parseString(value: string | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
@@ -80,6 +90,32 @@ function getObject(input: unknown): Record<string, unknown> | null {
 function normalizeApiHost(value: string | undefined): string {
   const trimmed = (value ?? DEFAULT_API_HOST).trim().replace(/\/+$/, "");
   return trimmed.endsWith("/exchange/v1") ? trimmed.slice(0, -"/exchange/v1".length) : trimmed;
+}
+
+function formatCryptoComError(responseStatus: number, code: number | null, message: string | null): string {
+  const normalizedMessage = message ?? null;
+  const hint = code !== null ? CRYPTO_COM_ERROR_HINTS[code] : undefined;
+
+  if (normalizedMessage && hint) {
+    return `${normalizedMessage} (${code}) ${hint}`;
+  }
+
+  if (normalizedMessage) {
+    if (/authentication failure/i.test(normalizedMessage)) {
+      return `${normalizedMessage} Verify the Exchange API key and secret, and if the key is IP-whitelisted, allow the backend server's public egress IP.`;
+    }
+    return code !== null ? `${normalizedMessage} (${code})` : normalizedMessage;
+  }
+
+  if (hint && code !== null) {
+    return `Crypto.com returned code ${code}. ${hint}`;
+  }
+
+  if (code !== null) {
+    return `Crypto.com returned code ${code}.`;
+  }
+
+  return `Crypto.com request failed (${responseStatus}).`;
 }
 
 function getCredentialsFromEnv(): CryptoComCredentials | null {
@@ -190,13 +226,14 @@ async function signedPost<T>(
 
   const payload = (await response.json()) as CryptoComEnvelope<T>;
   const code = parseNumber(payload.code);
+  const message = stringFromUnknown(payload.message);
 
   if (!response.ok) {
-    throw new Error(stringFromUnknown(payload.message) ?? `Crypto.com request failed (${response.status}).`);
+    throw new Error(formatCryptoComError(response.status, code, message));
   }
 
   if (code !== 0) {
-    throw new Error(stringFromUnknown(payload.message) ?? `Crypto.com returned code ${payload.code ?? "unknown"}.`);
+    throw new Error(formatCryptoComError(response.status, code, message));
   }
 
   if (payload.result === undefined) {
