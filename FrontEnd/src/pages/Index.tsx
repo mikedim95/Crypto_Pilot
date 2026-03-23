@@ -8,13 +8,10 @@ import { PortfolioPage } from "@/pages/PortfolioPage";
 import { TradingPage } from "@/pages/TradingPage";
 import { ExchangeIntelligencePage } from "@/pages/ExchangeIntelligencePage";
 import { ExecutionSimulatorPage } from "@/pages/ExecutionSimulatorPage";
-import { BotsPage } from "@/pages/BotsPage";
-import { AutomationPage } from "@/pages/AutomationPage";
-import { BtcNewsInsightsPage } from "@/pages/BtcNewsInsightsPage";
-import { DecisionIntelligencePage } from "@/pages/DecisionIntelligencePage";
-import { SignalReviewPage } from "@/pages/SignalReviewPage";
 import { AsicMinersPage } from "@/pages/AsicMinersPage";
+import { IntelligenceHubPage, type IntelligenceHubTab } from "@/pages/IntelligenceHubPage";
 import { NicehashPage } from "@/pages/NicehashPage";
+import { StrategiesHubPage, type StrategiesHubTab } from "@/pages/StrategiesHubPage";
 import type { AppSession, PortfolioAccountType } from "@/types/api";
 
 const inactivePageMeta: Record<string, { title: string; description: string }> = {
@@ -42,6 +39,36 @@ const Index = ({ session, onLogout }: IndexProps) => {
   const [accountType, setAccountType] = useState<PortfolioAccountType>("demo");
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [strategiesTab, setStrategiesTab] = useState<StrategiesHubTab>("bots");
+  const [intelligenceTab, setIntelligenceTab] = useState<IntelligenceHubTab>("decision-intelligence");
+
+  const handleNavigate = (page: string) => {
+    switch (page) {
+      case "rebalance":
+      case "bots":
+        setStrategiesTab("bots");
+        setCurrentPage("strategies");
+        return;
+      case "automation":
+        setStrategiesTab("automation");
+        setCurrentPage("strategies");
+        return;
+      case "strategies":
+        setCurrentPage("strategies");
+        return;
+      case "decision-intelligence":
+      case "signal-review":
+      case "btc-news":
+        setIntelligenceTab(page);
+        setCurrentPage("intelligence");
+        return;
+      case "intelligence":
+        setCurrentPage("intelligence");
+        return;
+      default:
+        setCurrentPage(page);
+    }
+  };
 
   const renderPage = () => {
     switch (currentPage) {
@@ -55,15 +82,26 @@ const Index = ({ session, onLogout }: IndexProps) => {
         return <ExecutionSimulatorPage />;
       case "rebalance":
       case "bots":
-        return <BotsPage accountType={accountType} />;
       case "automation":
-        return <AutomationPage accountType={accountType} />;
+      case "strategies":
+        return (
+          <StrategiesHubPage
+            accountType={accountType}
+            activeTab={strategiesTab}
+            onTabChange={setStrategiesTab}
+          />
+        );
       case "decision-intelligence":
-        return <DecisionIntelligencePage accountType={accountType} />;
       case "signal-review":
-        return <SignalReviewPage accountType={accountType} />;
       case "btc-news":
-        return <BtcNewsInsightsPage />;
+      case "intelligence":
+        return (
+          <IntelligenceHubPage
+            accountType={accountType}
+            activeTab={intelligenceTab}
+            onTabChange={setIntelligenceTab}
+          />
+        );
       case "asic-miners":
         return <AsicMinersPage />;
       case "nicehash":
@@ -82,7 +120,7 @@ const Index = ({ session, onLogout }: IndexProps) => {
 
   return (
     <div data-account-mode={accountType} className="app-shell flex h-screen bg-background overflow-hidden">
-      <AppSidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+      <AppSidebar currentPage={currentPage} onNavigate={handleNavigate} />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
           accountType={accountType}

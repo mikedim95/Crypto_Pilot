@@ -142,6 +142,17 @@
   }
 }
 
+@keyframes tab-panel-enter-keyframe {
+  from {
+    opacity: 0;
+    transform: translateX(18px) translateY(8px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) translateY(0) scale(1);
+  }
+}
+
 @keyframes soft-pulse {
   0%,
   100% {
@@ -193,6 +204,10 @@
 @layer utilities {
   .page-enter {
     animation: page-enter-keyframe var(--motion-base) var(--motion-ease) both;
+  }
+
+  .tab-panel-enter {
+    animation: tab-panel-enter-keyframe 360ms var(--motion-ease) both;
   }
 
   .pulse-accent {

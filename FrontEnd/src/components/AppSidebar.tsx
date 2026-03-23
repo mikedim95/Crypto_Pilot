@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 import {
   Briefcase,
   BarChart3,
-  RefreshCw,
   Bot,
   ClipboardList,
   ChevronLeft,
@@ -14,9 +13,7 @@ import {
   Menu,
   X,
   LayoutDashboard,
-  Newspaper,
   BrainCircuit,
-  ActivitySquare,
   ArrowLeftRight,
   PlaySquare,
 } from "lucide-react";
@@ -32,11 +29,8 @@ const navItems = [
   { id: "trading", label: "Trading", icon: ClipboardList },
   { id: "exchange-intelligence", label: "Exchange Intel", icon: ArrowLeftRight },
   { id: "execution-simulator", label: "Execution Sim", icon: PlaySquare },
-  { id: "bots", label: "Bots", icon: RefreshCw },
-  { id: "automation", label: "Strategies", icon: Bot },
-  { id: "decision-intelligence", label: "Decision Intel", icon: BrainCircuit },
-  { id: "signal-review", label: "Signal Review", icon: ActivitySquare },
-  { id: "btc-news", label: "BTC News", icon: Newspaper },
+  { id: "strategies", label: "Strategies", icon: Bot },
+  { id: "intelligence", label: "Intelligence", icon: BrainCircuit },
   { id: "asic-miners", label: "ASIC Miners", icon: HardDrive },
   { id: "nicehash", label: "NiceHash", icon: Cpu },
 ];
