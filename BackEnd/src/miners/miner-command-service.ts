@@ -5,6 +5,8 @@ import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
 import { MinerEntity, MinerLiveData } from "./types.js";
 
+const START_RECOVERY_WAIT_MS = 5_000;
+
 export class MinerCommandService {
   constructor(
     private readonly repository: MinerRepository,
@@ -12,6 +14,62 @@ export class MinerCommandService {
     private readonly authService: MinerAuthService,
     private readonly readService: MinerReadService
   ) {}
+
+  private async getMinerOrThrow(minerId: number): Promise<MinerEntity> {
+    const miner = await this.repository.getMinerById(minerId);
+    if (!miner) {
+      throw new Error(`Miner ${minerId} was not found.`);
+    }
+    return miner;
+  }
+
+  private async postWriteCommand(
+    miner: MinerEntity,
+    path: string,
+    body?: unknown,
+    authorizationMode: "raw" | "bearer" = "raw"
+  ): Promise<unknown> {
+    void authorizationMode;
+
+    // VNish write endpoints behave like an unlocked session on the miner host.
+    // Refresh the unlock first, then send the write exactly as a plain POST.
+    await this.authService.getFreshToken(miner);
+    return this.httpClient.post<unknown>(miner.apiBaseUrl, path, body);
+  }
+
+  private async logCompletedCommand(
+    minerId: number,
+    commandType: string,
+    body: unknown,
+    response: unknown,
+    createdBy?: string | null
+  ): Promise<void> {
+    await this.repository.logCommand({
+      minerId,
+      commandType,
+      request: body ?? null,
+      response,
+      status: "completed",
+      createdBy,
+    });
+  }
+
+  private async logFailedCommand(
+    minerId: number,
+    commandType: string,
+    body: unknown,
+    error: unknown,
+    createdBy?: string | null
+  ): Promise<void> {
+    await this.repository.logCommand({
+      minerId,
+      commandType,
+      request: body ?? null,
+      status: "failed",
+      errorText: error instanceof Error ? error.message : "Unknown command failure.",
+      createdBy,
+    });
+  }
 
   private async buildFallbackLiveData(miner: MinerEntity): Promise<MinerLiveData> {
     try {
@@ -65,6 +123,32 @@ export class MinerCommandService {
     );
   }
 
+  private async resolveLiveData(minerId: number, miner: MinerEntity): Promise<MinerLiveData> {
+    try {
+      const refreshed = await this.readService.readMiner(miner);
+      await this.persistRefreshedState(minerId, refreshed.liveData);
+      return refreshed.liveData;
+    } catch (error) {
+      const refreshMessage =
+        error instanceof Error ? error.message : "Miner command completed, but refreshing miner state failed.";
+
+      // Do not convert a successful miner write into a failed command because the telemetry readback was malformed.
+      await this.repository.updateMiner(minerId, { lastError: refreshMessage }).catch(() => null);
+
+      return this.buildFallbackLiveData(miner);
+    }
+  }
+
+  private async readCurrentLiveData(minerId: number, miner: MinerEntity): Promise<MinerLiveData | null> {
+    try {
+      const refreshed = await this.readService.readMiner(miner);
+      await this.persistRefreshedState(minerId, refreshed.liveData);
+      return refreshed.liveData;
+    } catch {
+      return null;
+    }
+  }
+
   private async runCommand(
     minerId: number,
     commandType: string,
@@ -73,65 +157,42 @@ export class MinerCommandService {
     createdBy?: string | null,
     authorizationMode: "raw" | "bearer" = "raw"
   ): Promise<{ liveData: MinerLiveData; response: unknown }> {
-    const miner = await this.repository.getMinerById(minerId);
-    if (!miner) {
-      throw new Error(`Miner ${minerId} was not found.`);
-    }
+    const miner = await this.getMinerOrThrow(minerId);
 
     let response: unknown;
 
     try {
-      // VNish write endpoints are more reliable when each action starts from a fresh unlock.
-      const token = await this.authService.getFreshToken(miner);
-      response = await this.httpClient.post<unknown>(
-        miner.apiBaseUrl,
-        path,
-        body,
-        token,
-        () => this.authService.retryWithFreshToken(miner),
-        authorizationMode
-      );
-
-      await this.repository.logCommand({
-        minerId,
-        commandType,
-        request: body ?? null,
-        response,
-        status: "completed",
-        createdBy,
-      });
+      response = await this.postWriteCommand(miner, path, body, authorizationMode);
+      await this.logCompletedCommand(minerId, commandType, body, response, createdBy);
     } catch (error) {
-      await this.repository.logCommand({
-        minerId,
-        commandType,
-        request: body ?? null,
-        status: "failed",
-        errorText: error instanceof Error ? error.message : "Unknown command failure.",
-        createdBy,
-      });
+      await this.logFailedCommand(minerId, commandType, body, error, createdBy);
       throw error;
     }
 
-    try {
-      const refreshed = await this.readService.readMiner(miner);
-      await this.persistRefreshedState(minerId, refreshed.liveData);
+    return {
+      liveData: await this.resolveLiveData(minerId, miner),
+      response,
+    };
+  }
 
-      return {
-        liveData: refreshed.liveData,
-        response,
-      };
-    } catch (error) {
-      const refreshMessage =
-        error instanceof Error ? error.message : "Miner command completed, but refreshing miner state failed.";
+  private async waitForStartRecoveryWindow(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, START_RECOVERY_WAIT_MS));
+  }
 
-      // Do not convert a successful miner write into a failed command because the telemetry readback was malformed.
-      await this.repository.updateMiner(minerId, { lastError: refreshMessage }).catch(() => null);
+  private async recoverStartCommand(minerId: number, miner: MinerEntity): Promise<{ liveData: MinerLiveData; response: unknown }> {
+    const stopResponse = await this.postWriteCommand(miner, "/mining/stop");
+    await this.waitForStartRecoveryWindow();
+    const startResponse = await this.postWriteCommand(miner, "/mining/start");
 
-      return {
-        liveData: await this.buildFallbackLiveData(miner),
-        response,
-      };
-    }
+    return {
+      liveData: await this.resolveLiveData(minerId, miner),
+      response: {
+        recoveryMode: "stop-wait-start",
+        waitMs: START_RECOVERY_WAIT_MS,
+        stopResponse,
+        startResponse,
+      },
+    };
   }
 
   restartMining(minerId: number, createdBy?: string | null) {
@@ -146,8 +207,55 @@ export class MinerCommandService {
     return this.runCommand(minerId, "resume", "/mining/resume", undefined, createdBy);
   }
 
-  startMining(minerId: number, createdBy?: string | null) {
-    return this.runCommand(minerId, "start", "/mining/start", undefined, createdBy);
+  async startMining(minerId: number, createdBy?: string | null) {
+    const miner = await this.getMinerOrThrow(minerId);
+
+    try {
+      const response = await this.postWriteCommand(miner, "/mining/start");
+      await this.logCompletedCommand(minerId, "start", null, response, createdBy);
+
+      return {
+        liveData: await this.resolveLiveData(minerId, miner),
+        response,
+      };
+    } catch (error) {
+      const currentLiveData = await this.readCurrentLiveData(minerId, miner);
+      if (currentLiveData?.minerState === "mining") {
+        const response = {
+          recoveryMode: "already-mining",
+          initialError: error instanceof Error ? error.message : "Start command returned an unknown error.",
+        };
+        await this.logCompletedCommand(minerId, "start", null, response, createdBy);
+
+        return {
+          liveData: currentLiveData,
+          response,
+        };
+      }
+
+      try {
+        const recovered = await this.recoverStartCommand(minerId, miner);
+        const response = {
+          recoveryMode: "start-fallback",
+          initialError: error instanceof Error ? error.message : "Start command returned an unknown error.",
+          recovery: recovered.response,
+        };
+        await this.logCompletedCommand(minerId, "start", null, response, createdBy);
+
+        return {
+          liveData: recovered.liveData,
+          response,
+        };
+      } catch (recoveryError) {
+        const initialMessage = error instanceof Error ? error.message : "Start command returned an unknown error.";
+        const recoveryMessage =
+          recoveryError instanceof Error ? recoveryError.message : "VNish recovery sequence failed.";
+        const combinedError = new Error(`${initialMessage} Recovery stop/start sequence also failed: ${recoveryMessage}`);
+
+        await this.logFailedCommand(minerId, "start", null, combinedError, createdBy);
+        throw combinedError;
+      }
+    }
   }
 
   stopMining(minerId: number, createdBy?: string | null) {
