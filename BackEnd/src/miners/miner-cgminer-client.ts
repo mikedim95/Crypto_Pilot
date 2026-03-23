@@ -12,13 +12,23 @@ function parseJsonWithNullTerminator(raw: string): CgminerRawResponse {
   return JSON.parse(sanitized) as CgminerRawResponse;
 }
 
+function normalizeCgminerRows(payload: CgminerRawResponse, key: "POOLS" | "DEVS"): unknown[] {
+  const value = payload[key];
+  return Array.isArray(value) ? value : [];
+}
+
 function normalizeCgminerPayload(command: string, payload: CgminerRawResponse): Record<string, unknown> | unknown[] {
   const upperCommand = command.toUpperCase();
+  if (command === "pools") {
+    return normalizeCgminerRows(payload, "POOLS");
+  }
+
+  if (command === "devs") {
+    return normalizeCgminerRows(payload, "DEVS");
+  }
+
   const keyedValue = payload[upperCommand];
   if (Array.isArray(keyedValue) && keyedValue.length > 0) {
-    if (command === "pools" || command === "devs") {
-      return keyedValue as unknown[];
-    }
     const first = keyedValue[0];
     return typeof first === "object" && first !== null ? (first as Record<string, unknown>) : payload;
   }
@@ -27,9 +37,6 @@ function normalizeCgminerPayload(command: string, payload: CgminerRawResponse): 
   for (const key of fallbackKeys) {
     const value = payload[key];
     if (Array.isArray(value) && value.length > 0) {
-      if (key === "POOLS" || key === "DEVS") {
-        return value as unknown[];
-      }
       const first = value[0];
       return typeof first === "object" && first !== null ? (first as Record<string, unknown>) : payload;
     }

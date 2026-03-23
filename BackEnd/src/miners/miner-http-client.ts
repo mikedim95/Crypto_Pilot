@@ -28,6 +28,24 @@ function parseJsonSafely(raw: string): unknown {
   }
 }
 
+function extractErrorMessage(payload: unknown, status: number): string {
+  if (typeof payload === "string" && payload.trim().length > 0) {
+    return payload.trim();
+  }
+
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    for (const key of ["message", "error", "detail", "description", "reason"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+
+  return `Miner HTTP request failed with status ${status}.`;
+}
+
 export class MinerHttpClient {
   constructor(private readonly timeoutMs = 5_000) {}
 
@@ -64,10 +82,7 @@ export class MinerHttpClient {
       }
 
       if (!response.ok) {
-        const message =
-          payload && typeof payload === "object" && "message" in payload && typeof (payload as { message?: unknown }).message === "string"
-            ? String((payload as { message: string }).message)
-            : `Miner HTTP request failed with status ${response.status}.`;
+        const message = extractErrorMessage(payload, response.status);
         throw new MinerHttpError(message, response.status, payload);
       }
 

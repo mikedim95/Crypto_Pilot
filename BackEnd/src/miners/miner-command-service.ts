@@ -1,9 +1,9 @@
 import { MinerAuthService } from "./miner-auth-service.js";
 import { MinerHttpClient } from "./miner-http-client.js";
-import { liveDataToSnapshotRaw, normalizePoolsForStorage } from "./miner-normalizer.js";
+import { buildMinerLiveDataFromSnapshot, liveDataToSnapshotRaw, normalizePoolsForStorage } from "./miner-normalizer.js";
 import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
-import { MinerLiveData } from "./types.js";
+import { MinerEntity, MinerLiveData } from "./types.js";
 
 export class MinerCommandService {
   constructor(
@@ -12,6 +12,20 @@ export class MinerCommandService {
     private readonly authService: MinerAuthService,
     private readonly readService: MinerReadService
   ) {}
+
+  private async buildFallbackLiveData(miner: MinerEntity): Promise<MinerLiveData> {
+    try {
+      const [latestMiner, snapshot, pools] = await Promise.all([
+        this.repository.getMinerById(miner.id),
+        this.repository.getLatestSnapshot(miner.id),
+        this.repository.listPools(miner.id),
+      ]);
+
+      return buildMinerLiveDataFromSnapshot(latestMiner ?? miner, snapshot, pools);
+    } catch {
+      return buildMinerLiveDataFromSnapshot(miner, null, []);
+    }
+  }
 
   private async persistRefreshedState(minerId: number, liveData: MinerLiveData): Promise<void> {
     await this.repository.saveSnapshot({
@@ -64,9 +78,11 @@ export class MinerCommandService {
       throw new Error(`Miner ${minerId} was not found.`);
     }
 
+    let response: unknown;
+
     try {
       const token = await this.authService.getValidToken(miner);
-      const response = await this.httpClient.post<unknown>(
+      response = await this.httpClient.post<unknown>(
         miner.apiBaseUrl,
         path,
         body,
@@ -83,14 +99,6 @@ export class MinerCommandService {
         status: "completed",
         createdBy,
       });
-
-      const refreshed = await this.readService.readMiner(miner);
-      await this.persistRefreshedState(minerId, refreshed.liveData);
-
-      return {
-        liveData: refreshed.liveData,
-        response,
-      };
     } catch (error) {
       await this.repository.logCommand({
         minerId,
@@ -101,6 +109,27 @@ export class MinerCommandService {
         createdBy,
       });
       throw error;
+    }
+
+    try {
+      const refreshed = await this.readService.readMiner(miner);
+      await this.persistRefreshedState(minerId, refreshed.liveData);
+
+      return {
+        liveData: refreshed.liveData,
+        response,
+      };
+    } catch (error) {
+      const refreshMessage =
+        error instanceof Error ? error.message : "Miner command completed, but refreshing miner state failed.";
+
+      // Do not convert a successful miner write into a failed command because the telemetry readback was malformed.
+      await this.repository.updateMiner(minerId, { lastError: refreshMessage }).catch(() => null);
+
+      return {
+        liveData: await this.buildFallbackLiveData(miner),
+        response,
+      };
     }
   }
 

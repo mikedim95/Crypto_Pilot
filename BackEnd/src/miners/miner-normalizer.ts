@@ -318,10 +318,11 @@ export function normalizePresetOptions(presets: unknown[] | null | undefined): M
     });
 }
 
-export function normalizePoolsFromCgminer(poolRows: unknown[], storedPools: MinerPoolEntity[] = []): { pools: MinerPoolLive[]; activePoolIndex: number | null } {
+export function normalizePoolsFromCgminer(poolRows: unknown, storedPools: MinerPoolEntity[] = []): { pools: MinerPoolLive[]; activePoolIndex: number | null } {
   let activePoolIndex: number | null = null;
+  const rows = listFromUnknown(poolRows);
 
-  const pools = poolRows
+  const pools = rows
     .map((entry, index) => {
       const record = parseJsonObject(entry);
       if (!record) return null;
@@ -364,14 +365,14 @@ export function normalizePoolsFromCgminer(poolRows: unknown[], storedPools: Mine
   return { pools, activePoolIndex };
 }
 
-export function normalizePoolsForStorage(poolRows: unknown[]): Array<{
+export function normalizePoolsForStorage(poolRows: unknown): Array<{
   poolIndex: number;
   url: string;
   username: string;
   status: string | null;
   isActive: boolean;
 }> {
-  return poolRows
+  return listFromUnknown(poolRows)
     .map((entry, index) => {
       const record = parseJsonObject(entry);
       if (!record) return null;

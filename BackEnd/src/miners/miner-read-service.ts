@@ -69,8 +69,8 @@ export class MinerReadService {
     const chipsPayload = chipsResult.status === "fulfilled" ? chipsResult.value : null;
     const cgminerSummary = summaryResult.status === "fulfilled" ? summaryResult.value : null;
     const cgminerStats = statsResult.status === "fulfilled" ? statsResult.value : null;
-    const cgminerDevs = devsResult.status === "fulfilled" ? devsResult.value : [];
-    const cgminerPools = poolsResult.status === "fulfilled" ? poolsResult.value : [];
+    const cgminerDevs = devsResult.status === "fulfilled" && Array.isArray(devsResult.value) ? devsResult.value : [];
+    const cgminerPools = poolsResult.status === "fulfilled" && Array.isArray(poolsResult.value) ? poolsResult.value : [];
     const presets = presetsResult.status === "fulfilled" ? presetsResult.value : null;
     const storedPools = await this.repository.listPools(miner.id);
 
