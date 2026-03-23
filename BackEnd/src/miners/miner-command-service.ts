@@ -81,7 +81,8 @@ export class MinerCommandService {
     let response: unknown;
 
     try {
-      const token = await this.authService.getValidToken(miner);
+      // VNish write endpoints are more reliable when each action starts from a fresh unlock.
+      const token = await this.authService.getFreshToken(miner);
       response = await this.httpClient.post<unknown>(
         miner.apiBaseUrl,
         path,
@@ -154,7 +155,8 @@ export class MinerCommandService {
   }
 
   reboot(minerId: number, after = 3, createdBy?: string | null) {
-    return this.runCommand(minerId, "reboot", "/system/reboot", { after }, createdBy, "bearer");
+    void after;
+    return this.runCommand(minerId, "reboot", "/system/reboot", undefined, createdBy);
   }
 
   setPreset(minerId: number, preset: string, createdBy?: string | null) {

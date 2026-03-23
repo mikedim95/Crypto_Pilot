@@ -27,17 +27,25 @@ export class MinerAuthService {
       return cached.token;
     }
 
-    const token = await this.unlock(miner);
-    this.tokenCache.set(miner.id, {
-      token,
-      expiresAt: Date.now() + this.tokenTtlMs,
-    });
-    return token;
+    return this.storeUnlockedToken(miner, await this.unlock(miner));
   }
 
   async retryWithFreshToken(miner: MinerEntity): Promise<string | null> {
     this.invalidate(miner.id);
     return this.getValidToken(miner);
+  }
+
+  async getFreshToken(miner: MinerEntity): Promise<string> {
+    this.invalidate(miner.id);
+    return this.storeUnlockedToken(miner, await this.unlock(miner));
+  }
+
+  private storeUnlockedToken(miner: MinerEntity, token: string): string {
+    this.tokenCache.set(miner.id, {
+      token,
+      expiresAt: Date.now() + this.tokenTtlMs,
+    });
+    return token;
   }
 
   private extractToken(payload: unknown): string | null {
