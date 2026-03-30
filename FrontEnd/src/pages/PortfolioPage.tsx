@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bot, CircleDot, MoreHorizontal, PieChart as PieChartIcon, Wallet } from "lucide-react";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AssetDetailsDialog } from "@/components/AssetDetailsDialog";
 import { PortfolioConnectionsPanel } from "@/components/portfolio/PortfolioConnectionsPanel";
 import { PortfolioTradeDialogs } from "@/components/portfolio/PortfolioTradeDialogs";
@@ -324,6 +324,42 @@ function AllocationTooltip({
   );
 }
 
+function SliceHoldingsPlotTooltip({
+  active,
+  assetBySymbol,
+  payload,
+}: {
+  active?: boolean;
+  assetBySymbol: Map<string, AllocationBucketAsset>;
+  payload?: Array<{ dataKey?: string | number; fill?: string; value?: number }>;
+}) {
+  const entry = payload?.find((item) => typeof item.value === "number" && item.value > 0);
+  if (!active || !entry) return null;
+
+  const symbol = String(entry.dataKey ?? "");
+  const asset = assetBySymbol.get(symbol);
+  if (!asset) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-card/95 px-3 py-2 shadow-xl backdrop-blur">
+      <div className="flex items-center gap-2 text-xs font-mono text-foreground">
+        <span
+          className="h-2.5 w-2.5 rounded-full"
+          style={{ backgroundColor: entry.fill ?? assetColorFromSymbol(asset.symbol) }}
+        />
+        <span>{asset.symbol}</span>
+        <span className="text-muted-foreground">{asset.name}</span>
+      </div>
+      <div className="mt-1 text-[11px] text-muted-foreground">
+        {formatUsd(asset.value)} | {asset.bucketAllocation.toFixed(2)}% of slice
+      </div>
+      <div className="text-[11px] text-muted-foreground">
+        {formatQuantity(asset.quantity)} units | {asset.portfolioAllocation.toFixed(2)}% of portfolio
+      </div>
+    </div>
+  );
+}
+
 interface SliceAnalysisDialogProps {
   accountType: PortfolioAccountType;
   bucket: AllocationBucket;
@@ -339,6 +375,36 @@ function SliceAnalysisDialog({
   onClose,
   onSelectAsset,
 }: SliceAnalysisDialogProps) {
+  const sliceHoldings = useMemo(
+    () =>
+      bucket.assets
+        .filter((asset) => asset.value > 0)
+        .map((asset, index, assets) => ({
+          ...asset,
+          color: assetColorFromSymbol(asset.symbol),
+          radius:
+            assets.length === 1
+              ? [10, 10, 10, 10]
+              : index === 0
+                ? [10, 0, 0, 10]
+                : index === assets.length - 1
+                  ? [0, 10, 10, 0]
+                  : [0, 0, 0, 0],
+        })),
+    [bucket.assets]
+  );
+  const sliceHoldingsPlotData = useMemo(() => {
+    const row: Record<string, string | number> = { layer: "Slice" };
+    sliceHoldings.forEach((asset) => {
+      row[asset.symbol] = asset.value;
+    });
+    return [row];
+  }, [sliceHoldings]);
+  const sliceHoldingsBySymbol = useMemo(
+    () => new Map(sliceHoldings.map((asset) => [asset.symbol, asset])),
+    [sliceHoldings]
+  );
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[90vh] max-w-5xl overflow-hidden border-border bg-card p-0">
@@ -378,6 +444,71 @@ function SliceAnalysisDialog({
           <div className="rounded-lg border border-border bg-secondary/15 px-4 py-3 text-xs text-muted-foreground">
             {bucket.description}
           </div>
+
+          {sliceHoldings.length > 0 ? (
+            <div className="rounded-xl border border-border bg-[linear-gradient(180deg,rgba(11,18,36,0.96),rgba(11,18,36,0.72))] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-[0.22em] text-muted-foreground">
+                    Holdings Layer Plot
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    Hover a layer to inspect the holding worth sitting inside this slice.
+                  </div>
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/35 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                  {sliceHoldings.length} layers
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-xl border border-border/70 bg-background/30 px-4 py-5">
+                <div className="h-[120px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={sliceHoldingsPlotData}
+                      layout="vertical"
+                      margin={{ top: 12, right: 8, left: 8, bottom: 12 }}
+                      barCategoryGap={0}
+                    >
+                      <XAxis type="number" hide domain={[0, Math.max(bucket.value, 0)]} />
+                      <YAxis type="category" dataKey="layer" hide />
+                      <Tooltip
+                        cursor={false}
+                        shared={false}
+                        content={<SliceHoldingsPlotTooltip assetBySymbol={sliceHoldingsBySymbol} />}
+                      />
+                      {sliceHoldings.map((asset) => (
+                        <Bar
+                          key={asset.symbol}
+                          dataKey={asset.symbol}
+                          stackId="slice"
+                          fill={asset.color}
+                          radius={asset.radius}
+                          isAnimationActive={false}
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {sliceHoldings.map((asset) => (
+                    <div
+                      key={`${bucket.id}-plot-chip-${asset.symbol}`}
+                      className="inline-flex items-center gap-2 rounded-full border border-border bg-background/55 px-3 py-1.5"
+                    >
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: asset.color }}
+                      />
+                      <span className="text-[11px] font-mono text-foreground">{asset.symbol}</span>
+                      <span className="text-[11px] text-muted-foreground">{asset.bucketAllocation.toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="overflow-x-auto rounded-xl border border-border">
             <table className="w-full min-w-[560px]">
