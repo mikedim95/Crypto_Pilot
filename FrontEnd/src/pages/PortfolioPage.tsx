@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, CircleDot, PieChart as PieChartIcon, Wallet } from "lucide-react";
+import { Bot, CircleDot, MoreHorizontal, PieChart as PieChartIcon, Wallet } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { AssetRow } from "@/components/AssetRow";
 import { AssetDetailsDialog } from "@/components/AssetDetailsDialog";
 import { PortfolioTradeDialogs } from "@/components/portfolio/PortfolioTradeDialogs";
 import { SpinnerValue } from "@/components/SpinnerValue";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useBotProfiles, useDashboardData, useTradingAssets } from "@/hooks/useTradingData";
 import { cn } from "@/lib/utils";
 import type { Asset, BotProfile, PortfolioAccountType, TradingAssetAvailability } from "@/types/api";
@@ -320,12 +322,148 @@ function AllocationTooltip({
   );
 }
 
+interface SliceAnalysisDialogProps {
+  accountType: PortfolioAccountType;
+  bucket: AllocationBucket;
+  hasEnabledDemoBots: boolean;
+  onClose: () => void;
+  onSelectAsset: (asset: Asset) => void;
+}
+
+function SliceAnalysisDialog({
+  accountType,
+  bucket,
+  hasEnabledDemoBots,
+  onClose,
+  onSelectAsset,
+}: SliceAnalysisDialogProps) {
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[90vh] max-w-5xl overflow-hidden border-border bg-card p-0">
+        <div className="border-b border-border px-6 py-5">
+          <DialogHeader className="space-y-3 text-left">
+            <div className="flex flex-wrap items-start justify-between gap-3 pr-8">
+              <div>
+                <DialogTitle className="font-mono text-xl text-foreground">Slice Analysis</DialogTitle>
+                <DialogDescription className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+                  Drill into {bucket.name} to see which assets are sitting inside it right now.
+                </DialogDescription>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/30 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+                {bucket.kind === "bot" ? <Bot className="h-3.5 w-3.5" /> : <Wallet className="h-3.5 w-3.5" />}
+                {bucket.kind === "bot" ? "Bot slice" : "Direct slice"}
+              </div>
+            </div>
+          </DialogHeader>
+        </div>
+
+        <div className="space-y-4 overflow-y-auto px-6 py-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-border bg-secondary/20 p-4">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Slice Value</div>
+              <div className="mt-2 text-lg font-mono font-semibold text-foreground">{formatUsd(bucket.value)}</div>
+            </div>
+            <div className="rounded-lg border border-border bg-secondary/20 p-4">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Portfolio Share</div>
+              <div className="mt-2 text-lg font-mono font-semibold text-foreground">{bucket.allocation.toFixed(2)}%</div>
+            </div>
+            <div className="rounded-lg border border-border bg-secondary/20 p-4">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Assets In Slice</div>
+              <div className="mt-2 text-lg font-mono font-semibold text-foreground">{bucket.assets.length}</div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-secondary/15 px-4 py-3 text-xs text-muted-foreground">
+            {bucket.description}
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full min-w-[560px]">
+              <thead>
+                <tr className="border-b border-border">
+                  {["Asset", "Quantity", "Value", "In Slice", "Of Portfolio"].map((heading) => (
+                    <th
+                      key={heading}
+                      className="px-4 py-3 text-right text-[11px] font-mono uppercase tracking-wider text-muted-foreground first:text-left"
+                    >
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {bucket.assets.map((bucketAsset) => (
+                  <tr
+                    key={`${bucket.id}-${bucketAsset.symbol}`}
+                    onClick={() => {
+                      if (!bucketAsset.asset) return;
+                      onSelectAsset(bucketAsset.asset);
+                      onClose();
+                    }}
+                    className={cn(
+                      "border-b border-border last:border-b-0",
+                      bucketAsset.asset ? "cursor-pointer hover:bg-secondary/20" : "cursor-default"
+                    )}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="flex h-8 w-8 items-center justify-center rounded-md bg-secondary"
+                          style={{ boxShadow: `inset 0 0 0 1px ${assetColorFromSymbol(bucketAsset.symbol)}` }}
+                        >
+                          <span className="text-xs font-mono font-semibold text-foreground">
+                            {bucketAsset.symbol.slice(0, 2)}
+                          </span>
+                        </div>
+                        <div>
+                          <div className="text-sm font-mono font-medium text-foreground">{bucketAsset.symbol}</div>
+                          <div className="text-[11px] text-muted-foreground">{bucketAsset.name}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm font-mono text-foreground">
+                      {formatQuantity(bucketAsset.quantity)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm font-mono text-foreground">
+                      {formatUsd(bucketAsset.value)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm font-mono text-foreground">
+                      {bucketAsset.bucketAllocation.toFixed(2)}%
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm font-mono text-muted-foreground">
+                      {bucketAsset.portfolioAllocation.toFixed(2)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {bucket.assets.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-secondary/20 px-5 py-8 text-center text-sm text-muted-foreground">
+              No assets are currently allocated inside this slice.
+            </div>
+          ) : null}
+
+          {accountType === "demo" && bucket.kind === "direct" && !hasEnabledDemoBots ? (
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/25 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
+              <CircleDot className="h-3.5 w-3.5" />
+              Create a bot in Strategies to split this portfolio into managed buckets.
+            </div>
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps) {
   const { data, isPending, error } = useDashboardData(accountType);
   const { data: botProfilesData } = useBotProfiles(accountType === "demo");
   const { data: tradingAssetsData } = useTradingAssets(accountType);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [selectedBucketId, setSelectedBucketId] = useState<string>("");
+  const [sliceDetailsBucketId, setSliceDetailsBucketId] = useState<string>("");
   const isLoading = isPending && !data;
   const changeMetricLabel = accountType === "demo" ? "Net P&L" : "24h Change";
 
@@ -351,6 +489,9 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
   );
   const selectedBucket =
     allocationBuckets.find((bucket) => bucket.id === selectedBucketId) ?? allocationBuckets[0] ?? null;
+  const sliceDetailsBucket =
+    allocationBuckets.find((bucket) => bucket.id === sliceDetailsBucketId && bucket.kind === "bot") ?? null;
+  const hasEnabledDemoBots = botProfiles.some((profile) => profile.isEnabled);
 
   const topPosition = [...assets].sort((a, b) => b.value - a.value)[0];
 
@@ -369,9 +510,22 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
     setSelectedBucketId(allocationBuckets[0]?.id ?? "");
   }, [allocationBuckets, selectedBucket]);
 
+  useEffect(() => {
+    if (!sliceDetailsBucketId) return;
+    if (allocationBuckets.some((bucket) => bucket.id === sliceDetailsBucketId && bucket.kind === "bot")) {
+      return;
+    }
+    setSliceDetailsBucketId("");
+  }, [allocationBuckets, sliceDetailsBucketId]);
+
   const handleSelectAsset = (asset: Asset) => {
     setSelectedAsset(asset);
     onSelectAsset?.(asset);
+  };
+
+  const openSliceDetails = (bucketId: string) => {
+    setSelectedBucketId(bucketId);
+    setSliceDetailsBucketId(bucketId);
   };
 
   return (
@@ -429,13 +583,16 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+        <div>
           <div className="rounded-xl border border-border bg-card p-5 animate-fade-up">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Allocation Destinations</div>
                 <div className="mt-2 text-sm text-muted-foreground">
                   The inner ring shows the bucket split. The outer ring breaks each bucket into the exact assets sitting inside it.
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Use the 3-dot button on bot slices when you want the full slice breakdown.
                 </div>
               </div>
               <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/30 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
@@ -517,39 +674,57 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
                   {allocationBuckets.map((bucket) => {
                     const selected = selectedBucket?.id === bucket.id;
                     return (
-                      <button
+                      <div
                         key={bucket.id}
-                        type="button"
-                        onClick={() => setSelectedBucketId(bucket.id)}
                         className={cn(
-                          "w-full rounded-xl border p-4 text-left transition-all duration-300",
+                          "rounded-xl border p-4 transition-all duration-300",
                           selected
                             ? "border-primary/35 bg-secondary/40 shadow-[0_0_0_1px_hsl(var(--primary)/0.12)]"
                             : "border-border bg-secondary/15 hover:border-primary/20 hover:bg-secondary/30"
                         )}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-start gap-3">
-                            <span
-                              className="mt-1 h-3 w-3 shrink-0 rounded-full"
-                              style={{ backgroundColor: bucket.color }}
-                            />
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <div className="text-sm font-mono font-semibold text-foreground">{bucket.name}</div>
-                                <span className="rounded-full border border-border bg-background/40 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                                  {bucket.kind === "bot" ? "Bot" : "Direct"}
-                                </span>
+                        <div className="flex items-start gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedBucketId(bucket.id)}
+                            className="min-w-0 flex-1 text-left"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex min-w-0 items-start gap-3">
+                                <span
+                                  className="mt-1 h-3 w-3 shrink-0 rounded-full"
+                                  style={{ backgroundColor: bucket.color }}
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <div className="text-sm font-mono font-semibold text-foreground">{bucket.name}</div>
+                                    <span className="rounded-full border border-border bg-background/40 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                                      {bucket.kind === "bot" ? "Bot" : "Direct"}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 text-xs text-muted-foreground">{bucket.description}</div>
+                                </div>
                               </div>
-                              <div className="mt-1 text-xs text-muted-foreground">{bucket.description}</div>
+                              <div className="shrink-0 text-right">
+                                <div className="text-sm font-mono font-semibold text-foreground">{formatUsd(bucket.value)}</div>
+                                <div className="mt-1 text-[11px] font-mono text-muted-foreground">{bucket.allocation.toFixed(2)}%</div>
+                              </div>
                             </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-sm font-mono font-semibold text-foreground">{formatUsd(bucket.value)}</div>
-                            <div className="mt-1 text-[11px] font-mono text-muted-foreground">{bucket.allocation.toFixed(2)}%</div>
-                          </div>
+                          </button>
+                          {bucket.kind === "bot" ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => openSliceDetails(bucket.id)}
+                              aria-label={`Open slice details for ${bucket.name}`}
+                              className="h-8 w-8 shrink-0 rounded-full border border-border bg-background/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          ) : null}
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                   {selectedBucket ? (
@@ -575,121 +750,6 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
                     </div>
                   ) : null}
                 </div>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border border-border bg-card p-5 animate-fade-up">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Slice Analysis</div>
-                <div className="mt-2 text-sm text-muted-foreground">
-                  Drill into the selected slice to see which assets are sitting inside it right now.
-                </div>
-              </div>
-              {selectedBucket ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/30 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                  {selectedBucket.kind === "bot" ? <Bot className="h-3.5 w-3.5" /> : <Wallet className="h-3.5 w-3.5" />}
-                  {selectedBucket.kind === "bot" ? "Bot slice" : "Direct slice"}
-                </div>
-              ) : null}
-            </div>
-
-            {!selectedBucket ? (
-              <div className="mt-6 rounded-xl border border-dashed border-border bg-secondary/20 px-5 py-12 text-center text-sm text-muted-foreground">
-                Select a slice to inspect its asset mix.
-              </div>
-            ) : (
-              <div key={selectedBucket.id} className="mt-6 space-y-4 tab-panel-enter">
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-lg border border-border bg-secondary/20 p-4">
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Slice Value</div>
-                    <div className="mt-2 text-lg font-mono font-semibold text-foreground">{formatUsd(selectedBucket.value)}</div>
-                  </div>
-                  <div className="rounded-lg border border-border bg-secondary/20 p-4">
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Portfolio Share</div>
-                    <div className="mt-2 text-lg font-mono font-semibold text-foreground">{selectedBucket.allocation.toFixed(2)}%</div>
-                  </div>
-                  <div className="rounded-lg border border-border bg-secondary/20 p-4">
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Assets In Slice</div>
-                    <div className="mt-2 text-lg font-mono font-semibold text-foreground">{selectedBucket.assets.length}</div>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-border bg-secondary/15 px-4 py-3 text-xs text-muted-foreground">
-                  {selectedBucket.description}
-                </div>
-
-                <div className="overflow-x-auto rounded-xl border border-border">
-                  <table className="w-full min-w-[560px]">
-                    <thead>
-                      <tr className="border-b border-border">
-                        {["Asset", "Quantity", "Value", "In Slice", "Of Portfolio"].map((heading) => (
-                          <th
-                            key={heading}
-                            className="px-4 py-3 text-right text-[11px] font-mono uppercase tracking-wider text-muted-foreground first:text-left"
-                          >
-                            {heading}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedBucket.assets.map((bucketAsset) => (
-                        <tr
-                          key={`${selectedBucket.id}-${bucketAsset.symbol}`}
-                          onClick={() => bucketAsset.asset && handleSelectAsset(bucketAsset.asset)}
-                          className={cn(
-                            "border-b border-border last:border-b-0",
-                            bucketAsset.asset ? "cursor-pointer hover:bg-secondary/20" : "cursor-default"
-                          )}
-                        >
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <div
-                                className="flex h-8 w-8 items-center justify-center rounded-md bg-secondary"
-                                style={{ boxShadow: `inset 0 0 0 1px ${assetColorFromSymbol(bucketAsset.symbol)}` }}
-                              >
-                                <span className="text-xs font-mono font-semibold text-foreground">
-                                  {bucketAsset.symbol.slice(0, 2)}
-                                </span>
-                              </div>
-                              <div>
-                                <div className="text-sm font-mono font-medium text-foreground">{bucketAsset.symbol}</div>
-                                <div className="text-[11px] text-muted-foreground">{bucketAsset.name}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right text-sm font-mono text-foreground">
-                            {formatQuantity(bucketAsset.quantity)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-sm font-mono text-foreground">
-                            {formatUsd(bucketAsset.value)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-sm font-mono text-foreground">
-                            {bucketAsset.bucketAllocation.toFixed(2)}%
-                          </td>
-                          <td className="px-4 py-3 text-right text-sm font-mono text-muted-foreground">
-                            {bucketAsset.portfolioAllocation.toFixed(2)}%
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {selectedBucket.assets.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-border bg-secondary/20 px-5 py-8 text-center text-sm text-muted-foreground">
-                    No assets are currently allocated inside this slice.
-                  </div>
-                ) : null}
-
-                {accountType === "demo" && selectedBucket.kind === "direct" && botProfiles.filter((profile) => profile.isEnabled).length === 0 ? (
-                  <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/25 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.2em] text-muted-foreground">
-                    <CircleDot className="h-3.5 w-3.5" />
-                    Create a bot in Strategies to split this portfolio into managed buckets.
-                  </div>
-                ) : null}
               </div>
             )}
           </div>
@@ -745,6 +805,16 @@ export function PortfolioPage({ accountType, onSelectAsset }: PortfolioPageProps
           portfolioAssets={assets}
           tradingAssets={tradingAssets}
         />
+
+        {sliceDetailsBucket ? (
+          <SliceAnalysisDialog
+            accountType={accountType}
+            bucket={sliceDetailsBucket}
+            hasEnabledDemoBots={hasEnabledDemoBots}
+            onClose={() => setSliceDetailsBucketId("")}
+            onSelectAsset={handleSelectAsset}
+          />
+        ) : null}
 
         {error && !data ? (
           <div className="rounded-md border border-negative/30 bg-negative/10 px-4 py-3 text-xs text-negative">
