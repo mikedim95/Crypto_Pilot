@@ -1,4 +1,5 @@
 import { liveDataToSnapshotRaw, normalizePoolsForStorage } from "./miner-normalizer.js";
+import { MinerIngestPublisher, type MinerIngestSnapshot } from "./miner-ingest-publisher.js";
 import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
 
@@ -11,7 +12,8 @@ export class MinerPollingService {
     private readonly repository: MinerRepository,
     private readonly readService: MinerReadService,
     private readonly pollIntervalMs = 15_000,
-    private readonly pollConcurrency = 3
+    private readonly pollConcurrency = 3,
+    private readonly ingestPublisher: MinerIngestPublisher | null = null
   ) {}
 
   start(): void {
@@ -72,55 +74,77 @@ export class MinerPollingService {
 
     try {
       const miners = await this.repository.listEnabledMiners();
-      const results: PromiseSettledResult<void>[] = [];
+      const ingestSnapshots: MinerIngestSnapshot[] = [];
       const safeConcurrency = Math.max(1, Math.floor(this.pollConcurrency));
 
       for (let index = 0; index < miners.length; index += safeConcurrency) {
         const minerBatch = miners.slice(index, index + safeConcurrency);
-        const batchResults = await Promise.allSettled(
+        const batchResults = await Promise.all(
           minerBatch.map(async (miner) => {
-            const readResult = await this.readService.readMiner(miner);
+            try {
+              const readResult = await this.readService.readMiner(miner);
 
-            if (!readResult.httpOk && !readResult.cgminerOk) {
-              throw new Error("Both VNish HTTP and CGMiner reads failed.");
+              if (!readResult.httpOk && !readResult.cgminerOk) {
+                throw new Error("Both VNish HTTP and CGMiner reads failed.");
+              }
+
+              this.failureCounts.set(miner.id, 0);
+
+              await this.repository.saveSnapshot({
+                minerId: miner.id,
+                online: readResult.liveData.online,
+                minerState: readResult.liveData.minerState,
+                presetName: readResult.liveData.presetName,
+                presetPretty: readResult.liveData.presetPretty,
+                presetStatus: readResult.liveData.presetStatus,
+                totalRateThs: readResult.liveData.totalRateThs,
+                boardTemps: readResult.liveData.boardTemps,
+                hotspotTemps: readResult.liveData.hotspotTemps,
+                fanPwm: readResult.liveData.fanPwm,
+                fanRpm: readResult.liveData.fanRpm,
+                powerWatts: readResult.liveData.powerWatts,
+                raw: liveDataToSnapshotRaw(readResult.liveData),
+              });
+
+              await this.repository.replacePools(miner.id, normalizePoolsForStorage(readResult.cgminerPools));
+              await this.repository.updateMiner(miner.id, {
+                lastSeenAt: readResult.liveData.lastSeenAt ?? new Date().toISOString(),
+                lastError: null,
+                currentPreset: readResult.liveData.presetName,
+              });
+
+              return {
+                miner,
+                error: null,
+                ingestSnapshot: this.ingestPublisher?.createSnapshotFromRead(miner, readResult) ?? null,
+              };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : "Unknown polling error.";
+              return {
+                miner,
+                error: message,
+                ingestSnapshot: this.ingestPublisher?.createFailureSnapshot(miner, message) ?? null,
+              };
             }
-
-            this.failureCounts.set(miner.id, 0);
-
-            await this.repository.saveSnapshot({
-              minerId: miner.id,
-              online: readResult.liveData.online,
-              minerState: readResult.liveData.minerState,
-              presetName: readResult.liveData.presetName,
-              presetPretty: readResult.liveData.presetPretty,
-              presetStatus: readResult.liveData.presetStatus,
-              totalRateThs: readResult.liveData.totalRateThs,
-              boardTemps: readResult.liveData.boardTemps,
-              hotspotTemps: readResult.liveData.hotspotTemps,
-              fanPwm: readResult.liveData.fanPwm,
-              fanRpm: readResult.liveData.fanRpm,
-              powerWatts: readResult.liveData.powerWatts,
-              raw: liveDataToSnapshotRaw(readResult.liveData),
-            });
-
-            await this.repository.replacePools(miner.id, normalizePoolsForStorage(readResult.cgminerPools));
-            await this.repository.updateMiner(miner.id, {
-              lastSeenAt: readResult.liveData.lastSeenAt ?? new Date().toISOString(),
-              lastError: null,
-              currentPreset: readResult.liveData.presetName,
-            });
           })
         );
 
-        results.push(...batchResults);
+        for (const result of batchResults) {
+          if (result.ingestSnapshot) {
+            ingestSnapshots.push(result.ingestSnapshot);
+          }
+
+          if (result.error) {
+            await this.markOfflineAfterFailure(result.miner.id, result.error);
+          }
+        }
       }
 
-      for (let index = 0; index < results.length; index += 1) {
-        const result = results[index];
-        if (result.status === "fulfilled") continue;
-        const miner = miners[index];
-        const message = result.reason instanceof Error ? result.reason.message : "Unknown polling error.";
-        await this.markOfflineAfterFailure(miner.id, message);
+      if (this.ingestPublisher?.isEnabled() && ingestSnapshots.length > 0) {
+        await this.ingestPublisher.publishSnapshots(ingestSnapshots).catch((error) => {
+          const message = error instanceof Error ? error.message : "Unknown ingest error.";
+          console.error(`[miner-ingest] Failed to publish ${ingestSnapshots.length} miner snapshot(s): ${message}`);
+        });
       }
     } finally {
       this.running = false;

@@ -20,6 +20,7 @@ import { MinerAuthService } from "./miners/miner-auth-service.js";
 import { MinerCgminerClient } from "./miners/miner-cgminer-client.js";
 import { MinerCommandService } from "./miners/miner-command-service.js";
 import { MinerCryptoService } from "./miners/miner-crypto-service.js";
+import { MinerIngestPublisher } from "./miners/miner-ingest-publisher.js";
 import { MinerHttpClient } from "./miners/miner-http-client.js";
 import { MinerPollingService } from "./miners/miner-polling-service.js";
 import { MinerReadService } from "./miners/miner-read-service.js";
@@ -103,11 +104,13 @@ const minerAuthService = new MinerAuthService(minerHttpClient, minerCryptoServic
 const minerReadService = new MinerReadService(minerRepository, minerHttpClient, minerCgminerClient, minerAuthService);
 const minerVerifyService = new MinerVerifyService(minerHttpClient, minerCgminerClient);
 const minerCommandService = new MinerCommandService(minerRepository, minerHttpClient, minerAuthService, minerReadService);
+const minerIngestPublisher = new MinerIngestPublisher();
 const minerPollingService = new MinerPollingService(
   minerRepository,
   minerReadService,
   minerPollMs,
-  minerPollConcurrency
+  minerPollConcurrency,
+  minerIngestPublisher
 );
 const btcNewsInsightsService = new BtcNewsInsightsService();
 const exchangeMarketService = new ExchangeMarketService();

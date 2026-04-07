@@ -43,6 +43,17 @@ The API runs on `http://localhost:3001` by default.
 
 - Live account endpoints currently return empty responses while the app runs in public-data and demo-only mode.
 
+### Pi To Vercel Miner Telemetry
+
+The Pi backend remains the local poller for VNish/CGMiner data. If you also want the hosted `mytrader-next` app on Vercel to show the same ASIC fleet, configure these optional env vars:
+
+- `MINER_INGEST_URL`
+- `MINER_INGEST_TOKEN`
+- `MINER_PUSH_SOURCE` (default: `pi`)
+- `MINER_PUSH_TIMEOUT_MS` (default: `8000`)
+
+When `MINER_INGEST_URL` and `MINER_INGEST_TOKEN` are present, every poll cycle still writes to the Pi's local MySQL database and also POSTs the latest fleet snapshot batch to the Vercel `/api/fleet/ingest` endpoint.
+
 ### Optional Mining/NiceHash env inputs
 
 You can provide mining data from your own collector by setting these variables:
