@@ -268,6 +268,11 @@ const DB_INIT_MAX_RETRIES = parseNonNegativeInteger(
   process.env.STRATEGY_DB_INIT_MAX_RETRIES,
   0
 );
+const READ_AFTER_WRITE_TIMEOUT_MS = parsePositiveInteger(
+  process.env.STRATEGY_READ_AFTER_WRITE_TIMEOUT_MS,
+  1_500
+);
+const READ_AFTER_WRITE_TIMEOUT_WARN_INTERVAL_MS = 30_000;
 
 function createDefaultDemoAccountSettings(): DemoAccountSettings {
   return {
@@ -963,6 +968,7 @@ export class StrategyRepository {
   private storageMode: StrategyRepositoryStorageMode = "database";
   private databaseAvailable = false;
   private initFailureMessage: string | null = null;
+  private lastReadAfterWriteTimeoutWarningAt = 0;
 
   constructor(customPath?: string) {
     this.storePath = customPath ?? path.join(process.cwd(), "data", "strategy-store.json");
@@ -1666,9 +1672,36 @@ export class StrategyRepository {
     reader: (store: StrategyStoreData) => T | Promise<T>
   ): Promise<T> {
     await this.init();
-    await this.writeQueue;
+    await this.waitForPendingWritesForRead();
     const store = await this.readStore(scope);
     return reader(store);
+  }
+
+  private async waitForPendingWritesForRead(): Promise<void> {
+    if (this.storageMode !== "database") {
+      await this.writeQueue;
+      return;
+    }
+
+    // Database-backed reads can safely fall back to the last committed row if a queued write stalls.
+    const pendingWrites = this.writeQueue;
+    const completed = await Promise.race([
+      pendingWrites.then(() => true),
+      delay(READ_AFTER_WRITE_TIMEOUT_MS).then(() => false),
+    ]);
+
+    if (completed) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastReadAfterWriteTimeoutWarningAt >= READ_AFTER_WRITE_TIMEOUT_WARN_INTERVAL_MS) {
+      this.lastReadAfterWriteTimeoutWarningAt = now;
+      console.warn(
+        `[strategy-repository] Timed out waiting ${READ_AFTER_WRITE_TIMEOUT_MS}ms for queued store writes. ` +
+          "Serving last persisted database state instead."
+      );
+    }
   }
 
   private mutate<T>(

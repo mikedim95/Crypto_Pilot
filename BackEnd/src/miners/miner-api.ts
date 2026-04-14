@@ -195,6 +195,11 @@ interface MinerApiDeps {
 export function createMinerRouter(deps: MinerApiDeps): Router {
   const router = Router();
 
+  const stripRawMinerPayload = (miner: MinerLiveData): Omit<MinerLiveData, "raw"> => {
+    const { raw: _raw, ...sanitized } = miner;
+    return sanitized;
+  };
+
   const loadMinersList = createTimedLoader<{ miners: MinerEntity[]; generatedAt: string }>(
     MINERS_LIST_CACHE_TTL_MS,
     async () => ({
@@ -670,7 +675,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     asyncHandler(async (_req, res) => {
       const fleetSnapshot = await loadFleetSnapshot();
       res.json({
-        miners: fleetSnapshot.fleet,
+        miners: fleetSnapshot.fleet.map(stripRawMinerPayload),
         generatedAt: fleetSnapshot.generatedAt,
       });
     })
