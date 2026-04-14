@@ -23,9 +23,29 @@ npm install
 npm run dev
 ```
 
+Wallet feature setup for the new `Wallet` tab:
+
+```bash
+cd BackEnd
+cp .env.example .env
+npm install
+npm run prisma:generate
+npm run prisma:migrate -- --name add_wallet_feature
+npm run dev
+```
+
+```bash
+cd FrontEnd
+cp .env.example .env
+npm install
+npm run dev
+```
+
 3. Open the frontend URL (default: `http://localhost:8080`).
 
 4. In **Settings**, connect Binance with API key/secret or configure backend `.env`.
+
+5. Open the new `Wallet` tab, connect Phantom in the browser, and sign the backend nonce before requesting quotes or swaps.
 
 ## Docker image build/push on commit
 

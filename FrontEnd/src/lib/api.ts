@@ -81,10 +81,23 @@ import type {
   TradeExecutionResponse,
   StrategyValidationResponse,
   VerifyMinerDraftResponse,
+  WalletAuthNonceResponse,
+  WalletAuthVerifyResponse,
+  WalletMeResponse,
+  WalletSwapExecuteRequest,
+  WalletSwapExecuteResponse,
+  WalletSwapPrepareRequest,
+  WalletSwapPrepareResponse,
+  WalletSwapQuoteRequest,
+  WalletSwapQuoteResponse,
 } from "@/types/api";
 import { getStoredSession } from "@/lib/session";
 
-const API_BASE_URL = ((import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "").replace(/\/+$/, "");
+const configuredApiUrl =
+  (import.meta.env.VITE_API_URL as string | undefined)?.trim() ||
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
+  "";
+const API_BASE_URL = configuredApiUrl.replace(/\/+$/, "").replace(/\/api$/, "");
 
 function resolveUserScope(): { userId?: number; username?: string } {
   const session = getStoredSession();
@@ -205,6 +218,51 @@ export const backendApi = {
   signupSession: (body: { username: string; password: string }) =>
     publicApiRequest<SessionLoginResponse>("/api/session/signup", {
       method: "POST",
+      body: JSON.stringify(body),
+    }),
+  createWalletNonce: (address: string) =>
+    publicApiRequest<WalletAuthNonceResponse>("/api/auth/nonce", {
+      method: "POST",
+      body: JSON.stringify({ address }),
+    }),
+  verifyWalletSignature: (body: {
+    address: string;
+    nonceId: string;
+    message: string;
+    signatureBase64: string;
+  }) =>
+    publicApiRequest<WalletAuthVerifyResponse>("/api/auth/verify", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getWalletMe: (token: string) =>
+    publicApiRequest<WalletMeResponse>("/api/wallet/me", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }),
+  getWalletSwapQuote: (token: string, body: WalletSwapQuoteRequest) =>
+    publicApiRequest<WalletSwapQuoteResponse>("/api/swap/quote", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    }),
+  manualWalletSwapPrepare: (token: string, body: WalletSwapPrepareRequest) =>
+    publicApiRequest<WalletSwapPrepareResponse>("/api/swap/manual", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    }),
+  manualWalletSwapExecute: (token: string, body: WalletSwapExecuteRequest) =>
+    publicApiRequest<WalletSwapExecuteResponse>("/api/swap/manual", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify(body),
     }),
   getDashboard: (accountType: PortfolioAccountType = "real") =>

@@ -1494,3 +1494,100 @@ export interface HistoricalCandleSyncRequest {
   startTime: string;
   endTime: string;
 }
+
+export type WalletTokenSymbol = "SOL" | "USDC";
+
+export interface WalletAuthNonceResponse {
+  nonceId: string;
+  address: string;
+  message: string;
+  expiresAt: string;
+}
+
+export interface WalletSessionInfo {
+  token: string;
+  address: string;
+  userId?: number;
+  walletId?: number;
+  expiresAt: string;
+}
+
+export interface WalletAuthVerifyResponse {
+  session: WalletSessionInfo;
+}
+
+export interface WalletBalance {
+  symbol: WalletTokenSymbol;
+  mint: string;
+  decimals: number;
+  amount: string;
+  atomicAmount: string;
+}
+
+export interface BotWalletStatus {
+  configured: boolean;
+  address?: string;
+  balances?: WalletBalance[];
+  note: string;
+}
+
+export interface WalletMeResponse {
+  wallet: {
+    address: string;
+    sessionExpiresAt: string;
+    authenticatedAt: string;
+  };
+  balances: WalletBalance[];
+  botWallet: BotWalletStatus;
+}
+
+export interface WalletSwapQuoteRequest {
+  fromSymbol: WalletTokenSymbol;
+  toSymbol: WalletTokenSymbol;
+  amount: string;
+}
+
+export interface WalletSwapQuote {
+  fromSymbol: WalletTokenSymbol;
+  toSymbol: WalletTokenSymbol;
+  amount: string;
+  inputAtomicAmount: string;
+  expectedOutputAmount: string;
+  outputAtomicAmount: string;
+  priceImpactPct: string;
+  routeLabel: string;
+  mode: string;
+  requestId?: string;
+}
+
+export interface WalletSwapQuoteResponse {
+  quote: WalletSwapQuote;
+}
+
+export interface WalletSwapPrepareRequest extends WalletSwapQuoteRequest {
+  action: "prepare";
+}
+
+export interface WalletSwapExecuteRequest {
+  action: "execute";
+  requestId: string;
+  signedTransaction: string;
+}
+
+export interface WalletSwapPrepareResponse {
+  action: "prepare";
+  requestId: string;
+  transaction: string;
+  quote: WalletSwapQuote;
+}
+
+export interface WalletSwapExecuteResponse {
+  action: "execute";
+  status: "Success" | "Failed";
+  code: number;
+  signature?: string;
+  explorerUrl?: string;
+  inputAmountResult?: string;
+  outputAmountResult?: string;
+  error?: string;
+}

@@ -11,6 +11,7 @@ import { AsicMinersPage } from "@/pages/AsicMinersPage";
 import { IntelligenceHubPage, type IntelligenceHubTab } from "@/pages/IntelligenceHubPage";
 import { NicehashPage } from "@/pages/NicehashPage";
 import { StrategiesHubPage, type StrategiesHubTab } from "@/pages/StrategiesHubPage";
+import { WalletPage } from "@/pages/WalletPage";
 import type { AppSession, PortfolioAccountType } from "@/types/api";
 
 const inactivePageMeta: Record<string, { title: string; description: string }> = {
@@ -88,6 +89,8 @@ const Index = ({ session, onLogout }: IndexProps) => {
         );
       case "exchange-intelligence":
         return <ExchangesHubPage accountType={accountType} activeTab={exchangesTab} onTabChange={setExchangesTab} />;
+      case "wallet":
+        return <WalletPage />;
       case "execution-simulator":
         return <ExecutionSimulatorPage />;
       case "rebalance":

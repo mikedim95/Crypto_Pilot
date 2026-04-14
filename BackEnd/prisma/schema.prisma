@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int        @id @default(autoincrement())
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  wallets   Wallet[]
+  auditLogs AuditLog[]
+}
+
+model Wallet {
+  id                  Int        @id @default(autoincrement())
+  address             String     @unique @db.VarChar(64)
+  provider            String     @default("phantom") @db.VarChar(32)
+  lastAuthenticatedAt DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  userId              Int
+  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auditLogs           AuditLog[]
+}
+
+model AuthNonce {
+  id            String   @id @default(cuid())
+  walletAddress String   @db.VarChar(64)
+  nonce         String   @db.VarChar(128)
+  message       String   @db.Text
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([walletAddress, expiresAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String   @db.VarChar(64)
+  status    String   @db.VarChar(32)
+  details   Json?
+  createdAt DateTime @default(now())
+  userId    Int?
+  walletId  Int?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  wallet    Wallet?  @relation(fields: [walletId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt])
+  @@index([userId, createdAt])
+  @@index([walletId, createdAt])
+}

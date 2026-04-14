@@ -16,6 +16,7 @@ import {
   BrainCircuit,
   ArrowLeftRight,
   PlaySquare,
+  Wallet,
 } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -26,6 +27,7 @@ interface SidebarProps {
 
 const navItems = [
   { id: "portfolio", label: "Portfolio", icon: Briefcase },
+  { id: "wallet", label: "Wallet", icon: Wallet },
   { id: "exchange-intelligence", label: "Exchanges", icon: ArrowLeftRight },
   { id: "execution-simulator", label: "Execution Sim", icon: PlaySquare },
   { id: "strategies", label: "Strategies", icon: Bot },

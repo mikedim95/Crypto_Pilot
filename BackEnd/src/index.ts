@@ -66,6 +66,10 @@ import { StrategyScheduler } from "./strategy/strategy-scheduler.js";
 import { createStrategyRouter } from "./strategy/strategy-api.js";
 import { resolveStrategyUserScope } from "./strategy/strategy-user-scope.js";
 import type { StrategyUserScope } from "./strategy/strategy-user-scope.js";
+import logger from "./logger.js";
+import { createWalletRouter } from "./wallet/wallet-api.js";
+import { createWalletRepository } from "./wallet/repository.js";
+import { WalletService } from "./wallet/wallet-service.js";
 
 const app = express();
 
@@ -85,6 +89,8 @@ const minerPollConcurrency =
   Number.isFinite(rawMinerPollConcurrency) && rawMinerPollConcurrency >= 1 ? Math.floor(rawMinerPollConcurrency) : 3;
 
 const strategyRepository = new StrategyRepository(process.env.STRATEGY_STORE_PATH);
+const walletRepository = createWalletRepository(logger.child({ module: "wallet-repository" }));
+const walletService = new WalletService(walletRepository, logger.child({ module: "wallet" }));
 const strategyRunner = new StrategyRunner(strategyRepository);
 const historicalCandleProvider = new PersistedHistoricalCandleProvider(strategyRepository);
 const historicalMarketDataSource = new PersistedHistoricalMarketDataSource(historicalCandleProvider);
@@ -331,14 +337,20 @@ app.use(
     origin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
   })
 );
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: "100kb" }));
 app.use((req, res, next) => {
   const startedAt = process.hrtime.bigint();
 
   res.on("finish", () => {
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-    console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs.toFixed(1)}ms`
+    logger.info(
+      {
+        method: req.method,
+        url: req.originalUrl,
+        statusCode: res.statusCode,
+        durationMs: Number(durationMs.toFixed(1)),
+      },
+      "HTTP request completed."
     );
   });
 
@@ -642,6 +654,13 @@ app.get("/api/crypto-com/overview", async (req, res) => {
 
 app.use(
   "/api",
+  createWalletRouter({
+    walletService,
+  })
+);
+
+app.use(
+  "/api",
   createExchangeMarketRouter({
     exchangeMarketService,
   })
@@ -707,10 +726,18 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 let server: ReturnType<typeof app.listen> | null = null;
 
-const shutdown = (): void => {
+const shutdown = async (): Promise<void> => {
   strategyScheduler.stop();
   performanceTracker.stop();
   minerPollingService.stop();
+  await walletService.shutdown().catch((error) => {
+    logger.warn(
+      {
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "Wallet service shutdown encountered an error."
+    );
+  });
   if (!server) {
     process.exit(0);
     return;
@@ -729,11 +756,11 @@ async function bootstrap(): Promise<void> {
 
   server = app.listen(port, () => {
     // Keep startup log minimal and avoid printing credentials.
-    console.log(`Backend listening on http://localhost:${port}`);
+    logger.info({ port }, "Backend listening.");
   });
 
   strategyScheduler.start().catch((error) => {
-    console.error("[strategy-scheduler] Failed to start:", error);
+    logger.error({ error }, "Strategy scheduler failed to start.");
   });
 
   performanceTracker.start();
@@ -741,9 +768,13 @@ async function bootstrap(): Promise<void> {
 }
 
 bootstrap().catch((error) => {
-  console.error("[bootstrap] Failed to start backend:", error);
+  logger.error({ error }, "Failed to start backend.");
   process.exit(1);
 });
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => {
+  void shutdown();
+});
+process.on("SIGTERM", () => {
+  void shutdown();
+});

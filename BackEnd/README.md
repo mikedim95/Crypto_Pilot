@@ -30,6 +30,11 @@ The API runs on `http://localhost:3001` by default.
 - `GET /api/health`
 - `GET /ready`
 - `GET /api/ready`
+- `POST /api/auth/nonce`
+- `POST /api/auth/verify`
+- `GET /api/wallet/me`
+- `POST /api/swap/quote`
+- `POST /api/swap/manual`
 - `GET /api/dashboard`
 - `GET /api/orders`
 - `GET /api/mining/overview`
@@ -42,6 +47,8 @@ The API runs on `http://localhost:3001` by default.
 ## Notes
 
 - Live account endpoints currently return empty responses while the app runs in public-data and demo-only mode.
+- The new Wallet feature uses Phantom in the browser only. The backend only verifies signed messages, reads balances through RPC, and proxies Jupiter order/execute requests.
+- For this repo's current deployment shape, Prisma is pointed at the existing MySQL database through `DATABASE_URL` so the Wallet feature can be added without introducing a second database.
 
 ### Pi To Vercel Miner Telemetry
 
