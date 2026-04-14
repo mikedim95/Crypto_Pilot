@@ -726,6 +726,25 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 let server: ReturnType<typeof app.listen> | null = null;
 
+async function initializeOptionalSubsystem(
+  subsystem: string,
+  init: () => Promise<void>,
+  onReady?: () => void
+): Promise<void> {
+  try {
+    await init();
+    onReady?.();
+  } catch (error) {
+    logger.warn(
+      {
+        subsystem,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "Optional startup subsystem failed. Continuing in degraded mode."
+    );
+  }
+}
+
 const shutdown = async (): Promise<void> => {
   strategyScheduler.stop();
   performanceTracker.stop();
@@ -750,21 +769,23 @@ const shutdown = async (): Promise<void> => {
 
 async function bootstrap(): Promise<void> {
   await strategyRepository.init();
-  await performanceTracker.init();
-  await signalOutcomeService.init();
-  await minerRepository.init();
 
   server = app.listen(port, () => {
     // Keep startup log minimal and avoid printing credentials.
     logger.info({ port }, "Backend listening.");
   });
 
+  void initializeOptionalSubsystem("performance-tracker", () => performanceTracker.init(), () => {
+    performanceTracker.start();
+  });
+  void initializeOptionalSubsystem("signal-review-service", () => signalOutcomeService.init());
+  void initializeOptionalSubsystem("miner-repository", () => minerRepository.init(), () => {
+    minerPollingService.start();
+  });
+
   strategyScheduler.start().catch((error) => {
     logger.error({ error }, "Strategy scheduler failed to start.");
   });
-
-  performanceTracker.start();
-  minerPollingService.start();
 }
 
 bootstrap().catch((error) => {

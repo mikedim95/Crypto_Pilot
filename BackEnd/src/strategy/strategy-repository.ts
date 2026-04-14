@@ -266,7 +266,7 @@ const DB_INIT_RETRY_INTERVAL_MS = parsePositiveInteger(
 );
 const DB_INIT_MAX_RETRIES = parseNonNegativeInteger(
   process.env.STRATEGY_DB_INIT_MAX_RETRIES,
-  0
+  12
 );
 const READ_AFTER_WRITE_TIMEOUT_MS = parsePositiveInteger(
   process.env.STRATEGY_READ_AFTER_WRITE_TIMEOUT_MS,
