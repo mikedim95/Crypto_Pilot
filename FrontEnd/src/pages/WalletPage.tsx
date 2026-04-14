@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { VersionedTransaction } from "@solana/web3.js";
 import { ArrowUpDown, CircleAlert, ShieldCheck, Wallet as WalletIcon } from "lucide-react";
@@ -10,7 +10,14 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { backendApi } from "@/lib/api";
-import { base64ToBytes, bytesToBase64, getPhantomProvider, shortenAddress } from "@/lib/phantom";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  getPhantomDetectionInfo,
+  getPhantomProvider,
+  shortenAddress,
+  waitForPhantomProvider,
+} from "@/lib/phantom";
 import { clearStoredWalletSession, getStoredWalletSession, setStoredWalletSession } from "@/lib/wallet-session";
 import type {
   WalletBalance,
@@ -65,18 +72,67 @@ export function WalletPage() {
   const [statusMessage, setStatusMessage] = useState<string>("Connect Phantom to begin.");
   const [quoteResult, setQuoteResult] = useState<WalletSwapQuote | null>(null);
   const [swapResult, setSwapResult] = useState<WalletSwapExecuteResponse | null>(null);
+  const [phantomInfo, setPhantomInfo] = useState(() => getPhantomDetectionInfo());
   const [swapForm, setSwapForm] = useState<WalletSwapQuoteRequest>({
     fromSymbol: "SOL",
     toSymbol: "USDC",
     amount: "",
   });
 
-  const phantomProvider = useMemo(() => getPhantomProvider(), []);
+  const phantomProvider = phantomInfo.provider;
   const phantomAvailable = Boolean(phantomProvider);
   const walletSignedIn = Boolean(walletSession?.token);
   const canQuote = walletSignedIn && swapForm.amount.trim().length > 0 && swapForm.fromSymbol !== swapForm.toSymbol;
   const connectedWalletMatchesSession =
     !walletSession?.address || !walletAddress || walletSession.address === walletAddress;
+
+  useEffect(() => {
+    let cancelled = false;
+    let pollTimer: number | null = null;
+    let stopTimer: number | null = null;
+
+    const refreshPhantomInfo = () => {
+      if (cancelled) return;
+      const next = getPhantomDetectionInfo();
+      setPhantomInfo(next);
+      if ((next.provider || next.requiresSecureContext) && pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshPhantomInfo();
+      }
+    };
+
+    refreshPhantomInfo();
+    pollTimer = window.setInterval(refreshPhantomInfo, 250);
+    stopTimer = window.setTimeout(() => {
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }, 5_000);
+
+    window.addEventListener("focus", refreshPhantomInfo);
+    window.addEventListener("load", refreshPhantomInfo);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+      }
+      if (stopTimer !== null) {
+        window.clearTimeout(stopTimer);
+      }
+      window.removeEventListener("focus", refreshPhantomInfo);
+      window.removeEventListener("load", refreshPhantomInfo);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (!phantomProvider) return;
@@ -92,6 +148,23 @@ export function WalletPage() {
         // Silent on first load. The user can connect explicitly.
       });
   }, [phantomProvider]);
+
+  useEffect(() => {
+    if (phantomAvailable || walletAddress || walletSession) {
+      return;
+    }
+    if (!phantomInfo.requiresSecureContext) {
+      return;
+    }
+
+    setStatusMessage(`Phantom requires HTTPS or localhost. Current origin: ${phantomInfo.origin}.`);
+  }, [
+    phantomAvailable,
+    phantomInfo.origin,
+    phantomInfo.requiresSecureContext,
+    walletAddress,
+    walletSession,
+  ]);
 
   useEffect(() => {
     if (!walletSession) {
@@ -139,9 +212,10 @@ export function WalletPage() {
 
   const connectMutation = useMutation({
     mutationFn: async () => {
-      const provider = getPhantomProvider();
+      const provider = (await waitForPhantomProvider()) ?? getPhantomProvider();
       if (!provider) {
-        throw new Error("Phantom was not detected in this browser.");
+        const detection = getPhantomDetectionInfo();
+        throw new Error(detection.unavailableReason ?? "Phantom was not detected in this browser.");
       }
 
       const { publicKey } = await provider.connect();
@@ -171,9 +245,10 @@ export function WalletPage() {
 
   const signInMutation = useMutation({
     mutationFn: async () => {
-      const provider = getPhantomProvider();
+      const provider = (await waitForPhantomProvider()) ?? getPhantomProvider();
       if (!provider) {
-        throw new Error("Phantom was not detected in this browser.");
+        const detection = getPhantomDetectionInfo();
+        throw new Error(detection.unavailableReason ?? "Phantom was not detected in this browser.");
       }
 
       const address = walletAddress || provider.publicKey?.toBase58();
@@ -214,9 +289,10 @@ export function WalletPage() {
 
   const swapMutation = useMutation({
     mutationFn: async () => {
-      const provider = getPhantomProvider();
+      const provider = (await waitForPhantomProvider()) ?? getPhantomProvider();
       if (!provider) {
-        throw new Error("Phantom was not detected in this browser.");
+        const detection = getPhantomDetectionInfo();
+        throw new Error(detection.unavailableReason ?? "Phantom was not detected in this browser.");
       }
       if (!walletSession?.token) {
         throw new Error("Sign in with your wallet before swapping.");
@@ -297,9 +373,11 @@ export function WalletPage() {
       {!phantomAvailable ? (
         <Alert className="border-amber-500/30 bg-amber-500/10">
           <CircleAlert className="h-4 w-4 text-amber-300" />
-          <AlertTitle>Phantom Not Detected</AlertTitle>
+          <AlertTitle>{phantomInfo.requiresSecureContext ? "Secure Origin Required" : "Phantom Not Detected"}</AlertTitle>
           <AlertDescription>
-            Install or unlock Phantom in this browser, then refresh this tab. Private keys stay inside Phantom and are never sent to the backend.
+            {phantomInfo.requiresSecureContext
+              ? `${phantomInfo.unavailableReason} Open the app through HTTPS or localhost, then reconnect.`
+              : "Install or unlock Phantom in this browser, then refresh this tab. Private keys stay inside Phantom and are never sent to the backend."}
           </AlertDescription>
         </Alert>
       ) : null}
