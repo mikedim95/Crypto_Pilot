@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getPhantomDetectionInfo, getPhantomProvider, type PhantomSolanaProvider } from "@/lib/phantom";
+import {
+  connectPhantom,
+  getPhantomDetectionInfo,
+  getPhantomProvider,
+  type PhantomSolanaProvider,
+} from "@/lib/phantom";
 
 function createProvider(overrides?: Partial<PhantomSolanaProvider>): PhantomSolanaProvider {
   return {
@@ -65,5 +70,18 @@ describe("phantom detection", () => {
 
     expect(detection.requiresSecureContext).toBe(false);
     expect(detection.unavailableReason).toContain("not available in this tab yet");
+  });
+
+  it("times out when Phantom connect never resolves", async () => {
+    const provider = createProvider({
+      connect: () =>
+        new Promise(() => {
+          // Intentionally unresolved to verify the wallet UI does not hang forever.
+        }),
+    });
+
+    await expect(connectPhantom(provider, { timeoutMs: 10 })).rejects.toThrow(
+      "Phantom did not respond to the connection request"
+    );
   });
 });

@@ -8,12 +8,16 @@ export interface PhantomSignedMessage {
   signature: Uint8Array;
 }
 
+export interface PhantomConnectResult {
+  publicKey: PhantomPublicKey;
+}
+
 export interface PhantomSolanaProvider {
   isPhantom?: boolean;
   isConnected?: boolean;
   providers?: PhantomSolanaProvider[];
   publicKey?: PhantomPublicKey;
-  connect(options?: { onlyIfTrusted?: boolean }): Promise<{ publicKey: PhantomPublicKey }>;
+  connect(options?: { onlyIfTrusted?: boolean }): Promise<PhantomConnectResult>;
   disconnect(): Promise<void>;
   signMessage(message: Uint8Array, display?: "utf8" | "hex"): Promise<PhantomSignedMessage>;
   signTransaction(transaction: VersionedTransaction): Promise<VersionedTransaction>;
@@ -37,6 +41,11 @@ export interface PhantomDetectionInfo {
   isSecureContext: boolean;
   origin: string;
   unavailableReason: string | null;
+}
+
+export interface PhantomConnectOptions {
+  onlyIfTrusted?: boolean;
+  timeoutMs?: number;
 }
 
 function resolvePhantomProvider(provider: PhantomSolanaProvider | null | undefined): PhantomSolanaProvider | null {
@@ -115,6 +124,48 @@ export async function waitForPhantomProvider(options?: {
       }
     }, intervalMs);
   });
+}
+
+function timeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  if (timeoutMs <= 0) {
+    return promise;
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(timeoutError(message));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
+}
+
+export async function connectPhantom(
+  provider: PhantomSolanaProvider,
+  options?: PhantomConnectOptions
+): Promise<PhantomConnectResult> {
+  const onlyIfTrusted = options?.onlyIfTrusted ?? false;
+  const timeoutMs = Math.max(0, options?.timeoutMs ?? (onlyIfTrusted ? 1_500 : 20_000));
+  const message = onlyIfTrusted
+    ? "Phantom did not auto-connect."
+    : "Phantom did not respond to the connection request. Open the Phantom extension and approve the connection.";
+
+  return withTimeout(provider.connect({ onlyIfTrusted }), timeoutMs, message);
 }
 
 export function shortenAddress(address: string, visibleChars = 4): string {

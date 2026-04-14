@@ -13,6 +13,7 @@ import { backendApi } from "@/lib/api";
 import {
   base64ToBytes,
   bytesToBase64,
+  connectPhantom,
   getPhantomDetectionInfo,
   getPhantomProvider,
   shortenAddress,
@@ -136,9 +137,14 @@ export function WalletPage() {
 
   useEffect(() => {
     if (!phantomProvider) return;
+    if (phantomProvider.isConnected && phantomProvider.publicKey) {
+      const address = phantomProvider.publicKey.toBase58();
+      setWalletAddress(address);
+      setStatusMessage(`Connected to ${shortenAddress(address)}.`);
+      return;
+    }
 
-    phantomProvider
-      .connect({ onlyIfTrusted: true })
+    connectPhantom(phantomProvider, { onlyIfTrusted: true, timeoutMs: 1_500 })
       .then(({ publicKey }) => {
         const address = publicKey.toBase58();
         setWalletAddress(address);
@@ -218,12 +224,15 @@ export function WalletPage() {
         throw new Error(detection.unavailableReason ?? "Phantom was not detected in this browser.");
       }
 
-      const { publicKey } = await provider.connect();
+      const { publicKey } = await connectPhantom(provider, { timeoutMs: 20_000 });
       return publicKey.toBase58();
     },
     onSuccess: (address) => {
       setWalletAddress(address);
       setStatusMessage(`Connected to ${shortenAddress(address)}.`);
+    },
+    onError: (error) => {
+      setStatusMessage(getErrorMessage(error) ?? "Unable to connect to Phantom.");
     },
   });
 
