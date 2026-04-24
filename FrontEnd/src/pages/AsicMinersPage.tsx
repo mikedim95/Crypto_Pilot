@@ -173,6 +173,27 @@ export function AsicMinersPage() {
     },
   });
 
+  const thermalSettingsMutation = useMutation({
+    mutationFn: (input: {
+      minerId: number;
+      temperatureControlEnabled: boolean;
+      temperatureControlMin: number | null;
+      temperatureControlMax: number | null;
+    }) =>
+      backendApi.updateMiner(input.minerId, {
+        temperatureControlEnabled: input.temperatureControlEnabled,
+        temperatureControlMin: input.temperatureControlMin,
+        temperatureControlMax: input.temperatureControlMax,
+      }),
+    onSuccess: async () => {
+      toast.success("Thermal control settings saved.");
+      await invalidateMinerQueries();
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to save thermal control settings.");
+    },
+  });
+
   const miners = minersData?.miners ?? EMPTY_MINERS;
   const fleetLive = fleetData?.miners ?? EMPTY_FLEET_LIVE;
   const overview = overviewData?.overview;
@@ -312,10 +333,17 @@ export function AsicMinersPage() {
           history={selectedMinerHistory?.history ?? []}
           isCommandPending={commandMutation.isPending || switchPoolMutation.isPending}
           isPresetPending={presetMutation.isPending}
+          isThermalSettingsPending={thermalSettingsMutation.isPending}
           onClose={() => setSelectedMinerId(undefined)}
           onCommand={(action) => commandMutation.mutate({ minerId: selectedMinerDetails.miner.id, action })}
           onSwitchPool={(poolId) => switchPoolMutation.mutate({ minerId: selectedMinerDetails.miner.id, poolId })}
           onApplyPreset={(preset) => presetMutation.mutate({ minerId: selectedMinerDetails.miner.id, preset })}
+          onSaveThermalSettings={(settings) =>
+            thermalSettingsMutation.mutate({
+              minerId: selectedMinerDetails.miner.id,
+              ...settings,
+            })
+          }
         />
       ) : null}
     </div>

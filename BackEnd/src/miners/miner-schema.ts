@@ -9,6 +9,10 @@ export const minerSchemaStatements = [
       model VARCHAR(120) NULL,
       firmware VARCHAR(120) NULL,
       current_preset VARCHAR(120) NULL,
+      temp_control_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      temp_control_min INT NULL,
+      temp_control_max INT NULL,
+      temp_control_last_adjusted_at DATETIME NULL,
       is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       verification_status VARCHAR(30) NOT NULL DEFAULT 'pending',
       last_seen_at DATETIME NULL,
@@ -17,6 +21,13 @@ export const minerSchemaStatements = [
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB
+  `,
+  `
+    ALTER TABLE miners
+      ADD COLUMN IF NOT EXISTS temp_control_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS temp_control_min INT NULL,
+      ADD COLUMN IF NOT EXISTS temp_control_max INT NULL,
+      ADD COLUMN IF NOT EXISTS temp_control_last_adjusted_at DATETIME NULL
   `,
   `
     CREATE TABLE IF NOT EXISTS miner_status_snapshots (

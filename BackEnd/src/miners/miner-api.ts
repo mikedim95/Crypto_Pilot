@@ -25,6 +25,9 @@ const updateMinerSchema = z.object({
   ip: z.string().trim().min(3).max(45).optional(),
   password: z.string().min(1).optional(),
   isEnabled: z.boolean().optional(),
+  temperatureControlEnabled: z.boolean().optional(),
+  temperatureControlMin: z.number().int().min(1).max(150).nullable().optional(),
+  temperatureControlMax: z.number().int().min(1).max(150).nullable().optional(),
 });
 
 const switchPoolSchema = z.object({
@@ -445,12 +448,42 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
         return;
       }
 
+      const nextTemperatureControlEnabled = body.temperatureControlEnabled ?? miner.temperatureControlEnabled;
+      const nextTemperatureControlMin =
+        body.temperatureControlMin !== undefined ? body.temperatureControlMin : miner.temperatureControlMin;
+      const nextTemperatureControlMax =
+        body.temperatureControlMax !== undefined ? body.temperatureControlMax : miner.temperatureControlMax;
+
+      if (
+        nextTemperatureControlMin !== null &&
+        nextTemperatureControlMax !== null &&
+        nextTemperatureControlMin >= nextTemperatureControlMax
+      ) {
+        res.status(400).json({
+          message: "Thermal control minimum temperature must be lower than the maximum temperature.",
+        });
+        return;
+      }
+
+      if (
+        nextTemperatureControlEnabled &&
+        (nextTemperatureControlMin === null || nextTemperatureControlMax === null)
+      ) {
+        res.status(400).json({
+          message: "Thermal control requires both a minimum and maximum temperature.",
+        });
+        return;
+      }
+
       const updated = await deps.repository.updateMiner(miner.id, {
         name: body.name,
         ip: body.ip,
         apiBaseUrl: body.ip ? buildApiBaseUrl(body.ip) : undefined,
         passwordEnc: body.password ? deps.cryptoService.encrypt(body.password) : undefined,
         isEnabled: body.isEnabled,
+        temperatureControlEnabled: body.temperatureControlEnabled,
+        temperatureControlMin: body.temperatureControlMin,
+        temperatureControlMax: body.temperatureControlMax,
         verificationStatus: body.ip || body.password ? "pending" : undefined,
       });
 

@@ -334,7 +334,18 @@ export const backendApi = {
     }),
   getMiners: () => apiRequest<MinersResponse>("/api/miners"),
   getMinerDetails: (minerId: number) => apiRequest<MinerDetailResponse>(`/api/miners/${minerId}`),
-  updateMiner: (minerId: number, body: { name?: string; ip?: string; password?: string; isEnabled?: boolean }) =>
+  updateMiner: (
+    minerId: number,
+    body: {
+      name?: string;
+      ip?: string;
+      password?: string;
+      isEnabled?: boolean;
+      temperatureControlEnabled?: boolean;
+      temperatureControlMin?: number | null;
+      temperatureControlMax?: number | null;
+    }
+  ) =>
     apiRequest<MinerResponse>(`/api/miners/${minerId}`, {
       method: "PATCH",
       body: JSON.stringify(body),

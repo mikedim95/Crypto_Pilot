@@ -23,6 +23,10 @@ export interface MinerRecord extends RowDataPacket {
   model: string | null;
   firmware: string | null;
   current_preset: string | null;
+  temp_control_enabled: number | boolean;
+  temp_control_min: number | null;
+  temp_control_max: number | null;
+  temp_control_last_adjusted_at: string | null;
   is_enabled: number | boolean;
   verification_status: MinerVerificationStatus;
   last_seen_at: string | null;
@@ -41,6 +45,10 @@ export interface MinerEntity {
   model: string | null;
   firmware: string | null;
   currentPreset: string | null;
+  temperatureControlEnabled: boolean;
+  temperatureControlMin: number | null;
+  temperatureControlMax: number | null;
+  temperatureControlLastAdjustedAt: string | null;
   isEnabled: boolean;
   verificationStatus: MinerVerificationStatus;
   lastSeenAt: string | null;
@@ -262,6 +270,10 @@ export interface MinerUpdateInput {
   ip?: string;
   password?: string;
   isEnabled?: boolean;
+  temperatureControlEnabled?: boolean;
+  temperatureControlMin?: number | null;
+  temperatureControlMax?: number | null;
+  temperatureControlLastAdjustedAt?: string | null;
 }
 
 export interface MinerVerifyDraftInput {
@@ -278,6 +290,10 @@ export interface MinerPersistInput {
   model?: string | null;
   firmware?: string | null;
   currentPreset?: string | null;
+  temperatureControlEnabled?: boolean;
+  temperatureControlMin?: number | null;
+  temperatureControlMax?: number | null;
+  temperatureControlLastAdjustedAt?: string | null;
   verificationStatus: MinerVerificationStatus;
   capabilities?: MinerCapabilities | null;
   lastSeenAt?: string | null;

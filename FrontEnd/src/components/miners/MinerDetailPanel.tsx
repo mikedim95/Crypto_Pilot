@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Loader2, RotateCcw, Gauge, Square, Play, Pause, Power, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { MinerStatusBadge } from "./MinerStatusBadge";
 import type { MinerDetailResponse, MinerHistoryPoint } from "@/types/api";
 
@@ -10,10 +12,16 @@ interface MinerDetailPanelProps {
   history: MinerHistoryPoint[];
   isCommandPending: boolean;
   isPresetPending: boolean;
+  isThermalSettingsPending: boolean;
   onClose: () => void;
   onCommand: (action: "restart" | "reboot" | "start" | "stop" | "pause" | "resume") => void;
   onSwitchPool: (poolId: number) => void;
   onApplyPreset: (preset: string) => void;
+  onSaveThermalSettings: (settings: {
+    temperatureControlEnabled: boolean;
+    temperatureControlMin: number | null;
+    temperatureControlMax: number | null;
+  }) => void;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -25,24 +33,73 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function isValidTemperature(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 150;
+}
+
+function parseTemperatureInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 150) {
+    return Number.NaN;
+  }
+  return parsed;
+}
+
 export function MinerDetailPanel({
   details,
   history,
   isCommandPending,
   isPresetPending,
+  isThermalSettingsPending,
   onClose,
   onCommand,
   onSwitchPool,
   onApplyPreset,
+  onSaveThermalSettings,
 }: MinerDetailPanelProps) {
   const { miner, liveData, presets, commands } = details;
   const [selectedPreset, setSelectedPreset] = useState<string>("");
+  const [temperatureControlEnabled, setTemperatureControlEnabled] = useState(false);
+  const [temperatureControlMin, setTemperatureControlMin] = useState("");
+  const [temperatureControlMax, setTemperatureControlMax] = useState("");
 
   useEffect(() => {
     setSelectedPreset(liveData.presetName ?? presets[0]?.name ?? "");
   }, [liveData.presetName, presets]);
 
+  useEffect(() => {
+    setTemperatureControlEnabled(miner.temperatureControlEnabled);
+    setTemperatureControlMin(
+      typeof miner.temperatureControlMin === "number" ? String(miner.temperatureControlMin) : "",
+    );
+    setTemperatureControlMax(
+      typeof miner.temperatureControlMax === "number" ? String(miner.temperatureControlMax) : "",
+    );
+  }, [miner.temperatureControlEnabled, miner.temperatureControlMax, miner.temperatureControlMin]);
+
   const canApplyPreset = selectedPreset.length > 0 && selectedPreset !== (liveData.presetName ?? "") && !isPresetPending;
+  const parsedTemperatureControlMin = parseTemperatureInput(temperatureControlMin);
+  const parsedTemperatureControlMax = parseTemperatureInput(temperatureControlMax);
+  const thermalInputsInvalid =
+    Number.isNaN(parsedTemperatureControlMin) || Number.isNaN(parsedTemperatureControlMax);
+  const thermalBoundsInvalid =
+    temperatureControlEnabled &&
+    !thermalInputsInvalid &&
+    (parsedTemperatureControlMin === null ||
+      parsedTemperatureControlMax === null ||
+      parsedTemperatureControlMin >= parsedTemperatureControlMax);
+  const hottestTemp = [...liveData.boardTemps, ...liveData.hotspotTemps].filter(isValidTemperature).reduce<number | null>(
+    (max, value) => (max === null ? value : Math.max(max, value)),
+    null,
+  );
+  const thermalSettingsChanged =
+    temperatureControlEnabled !== miner.temperatureControlEnabled ||
+    (parsedTemperatureControlMin ?? null) !== miner.temperatureControlMin ||
+    (parsedTemperatureControlMax ?? null) !== miner.temperatureControlMax;
+  const canSaveThermalSettings =
+    thermalSettingsChanged && !thermalInputsInvalid && !thermalBoundsInvalid && !isThermalSettingsPending;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-background/70 backdrop-blur-sm animate-overlay-fade" onClick={onClose}>
@@ -83,6 +140,86 @@ export function MinerDetailPanel({
           <section className="space-y-3">
             <div className="text-sm font-mono uppercase tracking-wider text-muted-foreground">Thermal</div>
             <div className="grid gap-3 grid-cols-1 md:grid-cols-2">
+              <div className="rounded-md border border-border bg-secondary/20 p-4 md:col-span-2">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Preset Temperature Control</div>
+                    <div className="font-mono text-sm text-foreground">
+                      Keep the hottest valid sensor between a per-miner min/max band. When the miner is colder than the
+                      minimum it steps up one preset. When it gets hotter than the maximum it steps down one preset.
+                    </div>
+                    <div className="font-mono text-xs text-muted-foreground">
+                      Hottest temp now: {hottestTemp !== null ? `${hottestTemp}C` : "--"}
+                      {miner.temperatureControlLastAdjustedAt
+                        ? ` | Last auto change: ${new Date(miner.temperatureControlLastAdjustedAt).toLocaleString()}`
+                        : ""}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
+                      {temperatureControlEnabled ? "Enabled" : "Disabled"}
+                    </span>
+                    <Switch
+                      checked={temperatureControlEnabled}
+                      disabled={isThermalSettingsPending}
+                      onCheckedChange={setTemperatureControlEnabled}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,160px)_minmax(0,160px)_auto]">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={150}
+                    step={1}
+                    className="font-mono text-sm"
+                    placeholder="Min hottest temp"
+                    value={temperatureControlMin}
+                    disabled={isThermalSettingsPending}
+                    onChange={(event) => setTemperatureControlMin(event.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    min={1}
+                    max={150}
+                    step={1}
+                    className="font-mono text-sm"
+                    placeholder="Max hottest temp"
+                    value={temperatureControlMax}
+                    disabled={isThermalSettingsPending}
+                    onChange={(event) => setTemperatureControlMax(event.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    className="font-mono text-sm"
+                    disabled={!canSaveThermalSettings}
+                    onClick={() =>
+                      onSaveThermalSettings({
+                        temperatureControlEnabled,
+                        temperatureControlMin: parsedTemperatureControlMin ?? null,
+                        temperatureControlMax: parsedTemperatureControlMax ?? null,
+                      })
+                    }
+                  >
+                    {isThermalSettingsPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Save Thermal Control
+                  </Button>
+                </div>
+
+                {thermalInputsInvalid ? (
+                  <div className="mt-3 font-mono text-xs text-negative">
+                    Temperatures must be whole numbers between 1C and 150C.
+                  </div>
+                ) : null}
+                {thermalBoundsInvalid ? (
+                  <div className="mt-3 font-mono text-xs text-negative">
+                    Thermal control needs both temperatures, and the minimum must stay lower than the maximum.
+                  </div>
+                ) : null}
+              </div>
+
               <div className="rounded-md border border-border bg-secondary/20 p-4">
                 <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Board Temps</div>
                 <div className="mt-3 flex flex-wrap gap-2">

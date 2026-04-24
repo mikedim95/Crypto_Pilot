@@ -132,6 +132,10 @@ export class MinerRepository {
             model,
             firmware,
             current_preset,
+            temp_control_enabled,
+            temp_control_min,
+            temp_control_max,
+            temp_control_last_adjusted_at,
             is_enabled,
             verification_status,
             last_seen_at,
@@ -147,6 +151,10 @@ export class MinerRepository {
           input.model ?? null,
           input.firmware ?? null,
           input.currentPreset ?? null,
+          input.temperatureControlEnabled ?? false,
+          input.temperatureControlMin ?? null,
+          input.temperatureControlMax ?? null,
+          toMysqlDateTime(input.temperatureControlLastAdjustedAt),
           input.isEnabled ?? true,
           input.verificationStatus,
           toMysqlDateTime(input.lastSeenAt),
@@ -181,6 +189,12 @@ export class MinerRepository {
       if ("model" in patch) push("model", patch.model ?? null);
       if ("firmware" in patch) push("firmware", patch.firmware ?? null);
       if ("currentPreset" in patch) push("current_preset", patch.currentPreset ?? null);
+      if (typeof patch.temperatureControlEnabled === "boolean") push("temp_control_enabled", patch.temperatureControlEnabled);
+      if ("temperatureControlMin" in patch) push("temp_control_min", patch.temperatureControlMin ?? null);
+      if ("temperatureControlMax" in patch) push("temp_control_max", patch.temperatureControlMax ?? null);
+      if ("temperatureControlLastAdjustedAt" in patch) {
+        push("temp_control_last_adjusted_at", toMysqlDateTime(patch.temperatureControlLastAdjustedAt));
+      }
       if (typeof patch.isEnabled === "boolean") push("is_enabled", patch.isEnabled);
       if (typeof patch.verificationStatus === "string") push("verification_status", patch.verificationStatus);
       if ("lastSeenAt" in patch) push("last_seen_at", toMysqlDateTime(patch.lastSeenAt));

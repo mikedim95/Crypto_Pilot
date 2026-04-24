@@ -114,6 +114,7 @@ const minerIngestPublisher = new MinerIngestPublisher();
 const minerPollingService = new MinerPollingService(
   minerRepository,
   minerReadService,
+  minerCommandService,
   minerPollMs,
   minerPollConcurrency,
   minerIngestPublisher

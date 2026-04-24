@@ -1,7 +1,60 @@
-import { liveDataToSnapshotRaw, normalizePoolsForStorage } from "./miner-normalizer.js";
+import { liveDataToSnapshotRaw, normalizePoolsForStorage, normalizePresetOptions } from "./miner-normalizer.js";
+import { MinerCommandService } from "./miner-command-service.js";
 import { MinerIngestPublisher, type MinerIngestSnapshot } from "./miner-ingest-publisher.js";
 import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
+import type { MinerEntity, MinerPresetOption, MinerReadResult } from "./types.js";
+
+const TEMP_CONTROL_COOLDOWN_MS = (() => {
+  const parsed = Number(process.env.MINER_TEMP_CONTROL_COOLDOWN_MS ?? 120_000);
+  if (!Number.isFinite(parsed) || parsed < 15_000) {
+    return 120_000;
+  }
+  return Math.round(parsed);
+})();
+
+function isValidTemperature(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 150;
+}
+
+function hottestTemperature(readResult: MinerReadResult): number | null {
+  const temperatures = [...readResult.liveData.boardTemps, ...readResult.liveData.hotspotTemps].filter(isValidTemperature);
+  if (temperatures.length === 0) {
+    return null;
+  }
+  return Math.max(...temperatures);
+}
+
+function parsePresetPowerHint(preset: MinerPresetOption): number | null {
+  const label = `${preset.pretty ?? ""} ${preset.name}`.trim();
+  if (!label) return null;
+  const match = /(\d+(?:\.\d+)?)\s*w(?:att)?/i.exec(label);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sortPresetsForPowerScaling(presets: MinerPresetOption[]): MinerPresetOption[] {
+  const ranked = presets.map((preset, index) => ({
+    preset,
+    index,
+    powerHint: parsePresetPowerHint(preset),
+  }));
+  const fullyHinted = ranked.every((entry) => entry.powerHint !== null);
+
+  if (!fullyHinted) {
+    return presets;
+  }
+
+  return ranked
+    .sort((left, right) => {
+      if (left.powerHint === right.powerHint) {
+        return left.index - right.index;
+      }
+      return (left.powerHint ?? 0) - (right.powerHint ?? 0);
+    })
+    .map((entry) => entry.preset);
+}
 
 export class MinerPollingService {
   private timer: NodeJS.Timeout | null = null;
@@ -11,6 +64,7 @@ export class MinerPollingService {
   constructor(
     private readonly repository: MinerRepository,
     private readonly readService: MinerReadService,
+    private readonly commandService: MinerCommandService,
     private readonly pollIntervalMs = 15_000,
     private readonly pollConcurrency = 3,
     private readonly ingestPublisher: MinerIngestPublisher | null = null
@@ -68,6 +122,87 @@ export class MinerPollingService {
     });
   }
 
+  private shouldApplyTemperatureControl(miner: MinerEntity, readResult: MinerReadResult): boolean {
+    if (!miner.temperatureControlEnabled) {
+      return false;
+    }
+
+    if (
+      miner.temperatureControlMin === null ||
+      miner.temperatureControlMax === null ||
+      miner.temperatureControlMin >= miner.temperatureControlMax
+    ) {
+      return false;
+    }
+
+    if (!readResult.liveData.online) {
+      return false;
+    }
+
+    const normalizedState = readResult.liveData.minerState?.trim().toLowerCase();
+    if (normalizedState && ["offline", "stopped", "paused", "disabled"].includes(normalizedState)) {
+      return false;
+    }
+
+    if ((readResult.liveData.totalRateThs ?? 0) <= 0 && normalizedState !== "mining") {
+      return false;
+    }
+
+    return Array.isArray(readResult.presets) && readResult.presets.length > 1;
+  }
+
+  private async applyTemperatureControl(miner: MinerEntity, readResult: MinerReadResult): Promise<void> {
+    if (!this.shouldApplyTemperatureControl(miner, readResult)) {
+      return;
+    }
+
+    const hottestTemp = hottestTemperature(readResult);
+    if (hottestTemp === null) {
+      return;
+    }
+
+    const presets = sortPresetsForPowerScaling(normalizePresetOptions(readResult.presets ?? []));
+
+    if (presets.length < 2) {
+      return;
+    }
+
+    const currentPresetName = (readResult.liveData.presetName ?? miner.currentPreset)?.trim().toLowerCase();
+    if (!currentPresetName) {
+      return;
+    }
+
+    const currentIndex = presets.findIndex((preset) => preset.name.trim().toLowerCase() === currentPresetName);
+    if (currentIndex < 0) {
+      return;
+    }
+
+    const lastAdjustedAt = miner.temperatureControlLastAdjustedAt
+      ? new Date(miner.temperatureControlLastAdjustedAt).getTime()
+      : 0;
+    if (lastAdjustedAt > 0 && Date.now() - lastAdjustedAt < TEMP_CONTROL_COOLDOWN_MS) {
+      return;
+    }
+
+    let targetPreset: MinerPresetOption | null = null;
+    if (hottestTemp < miner.temperatureControlMin! && currentIndex < presets.length - 1) {
+      targetPreset = presets[currentIndex + 1];
+    } else if (hottestTemp > miner.temperatureControlMax! && currentIndex > 0) {
+      targetPreset = presets[currentIndex - 1];
+    }
+
+    if (!targetPreset || targetPreset.name.trim().toLowerCase() === currentPresetName) {
+      return;
+    }
+
+    await this.commandService.setPreset(miner.id, targetPreset.name, "thermal-controller");
+    await this.repository.updateMiner(miner.id, {
+      currentPreset: targetPreset.name,
+      temperatureControlLastAdjustedAt: new Date().toISOString(),
+      lastError: null,
+    });
+  }
+
   async pollOnce(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -111,6 +246,14 @@ export class MinerPollingService {
                 lastSeenAt: readResult.liveData.lastSeenAt ?? new Date().toISOString(),
                 lastError: null,
                 currentPreset: readResult.liveData.presetName,
+              });
+
+              await this.applyTemperatureControl(miner, readResult).catch(async (error) => {
+                const message = error instanceof Error ? error.message : "Automatic thermal preset control failed.";
+                await this.repository.updateMiner(miner.id, {
+                  lastError: message,
+                });
+                console.error(`[miner-temp-control] Miner ${miner.id} (${miner.name}) failed: ${message}`);
               });
 
               return {

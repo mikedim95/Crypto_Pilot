@@ -1,0 +1,5 @@
+ALTER TABLE miners
+  ADD COLUMN IF NOT EXISTS temp_control_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS temp_control_min INT NULL,
+  ADD COLUMN IF NOT EXISTS temp_control_max INT NULL,
+  ADD COLUMN IF NOT EXISTS temp_control_last_adjusted_at DATETIME NULL;

@@ -96,6 +96,10 @@ export interface MinerEntity {
   model: string | null;
   firmware: string | null;
   currentPreset: string | null;
+  temperatureControlEnabled: boolean;
+  temperatureControlMin: number | null;
+  temperatureControlMax: number | null;
+  temperatureControlLastAdjustedAt: string | null;
   isEnabled: boolean;
   verificationStatus: "pending" | "verified" | "failed";
   lastSeenAt: string | null;
