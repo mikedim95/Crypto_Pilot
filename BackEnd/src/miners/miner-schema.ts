@@ -23,13 +23,6 @@ export const minerSchemaStatements = [
     ) ENGINE=InnoDB
   `,
   `
-    ALTER TABLE miners
-      ADD COLUMN IF NOT EXISTS temp_control_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS temp_control_min INT NULL,
-      ADD COLUMN IF NOT EXISTS temp_control_max INT NULL,
-      ADD COLUMN IF NOT EXISTS temp_control_last_adjusted_at DATETIME NULL
-  `,
-  `
     CREATE TABLE IF NOT EXISTS miner_status_snapshots (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       miner_id BIGINT UNSIGNED NOT NULL,
@@ -91,4 +84,11 @@ export const minerSchemaStatements = [
         ON DELETE CASCADE
     ) ENGINE=InnoDB
   `,
+] as const;
+
+export const minerColumnBackfillStatements = [
+  `ALTER TABLE miners ADD COLUMN temp_control_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE miners ADD COLUMN temp_control_min INT NULL`,
+  `ALTER TABLE miners ADD COLUMN temp_control_max INT NULL`,
+  `ALTER TABLE miners ADD COLUMN temp_control_last_adjusted_at DATETIME NULL`,
 ] as const;

@@ -1,6 +1,6 @@
 import type { PoolConnection } from "mysql2/promise";
 import pool from "../db.js";
-import { minerSchemaStatements } from "./miner-schema.js";
+import { minerColumnBackfillStatements, minerSchemaStatements } from "./miner-schema.js";
 import {
   FleetHistoryBucketRecord,
   FleetHistoryBucketByMinerRecord,
@@ -20,6 +20,12 @@ import {
   MinerUpdateInput,
 } from "./types.js";
 import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord, toMysqlDateTime } from "./miner-utils.js";
+
+function extractErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.trim().length > 0 ? code : null;
+}
 
 export class MinerRepository {
   private initPromise: Promise<void> | null = null;
@@ -49,6 +55,16 @@ export class MinerRepository {
     try {
       for (const statement of minerSchemaStatements) {
         await conn.query(statement);
+      }
+
+      for (const statement of minerColumnBackfillStatements) {
+        try {
+          await conn.query(statement);
+        } catch (error) {
+          if (extractErrorCode(error) !== "ER_DUP_FIELDNAME") {
+            throw error;
+          }
+        }
       }
     } finally {
       conn.release();
@@ -141,7 +157,7 @@ export class MinerRepository {
             last_seen_at,
             last_error,
             capabilities_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           input.name,
