@@ -33,6 +33,7 @@ const SCOPE_OPTIONS: Array<{ value: FleetHistoryScope; label: string }> = [
 ];
 
 type ChartMetricKey = "totalRateThs" | "maxTemp";
+type BrushWindow = { startIndex: number; endIndex: number };
 
 function isFiniteMetricValue(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -88,6 +89,19 @@ function buildChartRows(history: FleetHistorySeries[], metric: ChartMetricKey) {
   });
 }
 
+function getHistoryTimestampCount(history: FleetHistorySeries[]) {
+  const timestamps = new Set<string>();
+  for (const series of history) {
+    for (const point of series.points) {
+      const timestamp = String(point.timestamp);
+      if (Number.isFinite(new Date(timestamp).getTime())) {
+        timestamps.add(timestamp);
+      }
+    }
+  }
+  return timestamps.size;
+}
+
 function getDefaultBrushWindow(scope: FleetHistoryScope, rowCount: number) {
   const sizeByScope: Record<FleetHistoryScope, number> = { hour: 60, day: 96, week: 168, month: 120 };
   const desiredSize = sizeByScope[scope];
@@ -103,7 +117,7 @@ function clampBrushIndex(value: number, rowCount: number): number {
 
 function normalizeBrushWindow(
   next: { startIndex?: number; endIndex?: number } | undefined,
-  previous: { startIndex: number; endIndex: number },
+  previous: BrushWindow,
   rowCount: number
 ) {
   if (rowCount <= 0) return { startIndex: 0, endIndex: 0 };
@@ -113,17 +127,45 @@ function normalizeBrushWindow(
   return { startIndex: safeEnd, endIndex: safeStart };
 }
 
-function getLogTicks(rows: Array<Record<string, string | number | null>>, seriesMeta: Array<{ key: string }>) {
-  const values = rows.flatMap((row) =>
+function getVisibleMetricValues(
+  rows: Array<Record<string, string | number | null>>,
+  seriesMeta: Array<{ key: string }>,
+  brushWindow: BrushWindow
+) {
+  return rows.slice(brushWindow.startIndex, brushWindow.endIndex + 1).flatMap((row) =>
     seriesMeta
       .map((series) => row[series.key])
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0)
   );
-  if (values.length === 0) return [1, 10, 100];
+}
 
-  const minPower = Math.floor(Math.log10(Math.max(1, Math.min(...values))));
-  const maxPower = Math.max(minPower, Math.floor(Math.log10(Math.max(...values))));
-  return Array.from({ length: maxPower - minPower + 1 }, (_, index) => 10 ** (minPower + index));
+function getHashrateDomain(values: number[]): [number, number] {
+  if (values.length === 0) return [1, 100];
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  if (minValue === maxValue) {
+    return [Math.max(0.1, minValue * 0.9), maxValue * 1.1];
+  }
+  return [Math.max(0.1, minValue * 0.94), maxValue * 1.06];
+}
+
+function getHashrateTicks(domain: [number, number]) {
+  const [minValue, maxValue] = domain;
+  const ratio = maxValue / minValue;
+  if (ratio > 8) {
+    const minPower = Math.floor(Math.log10(minValue));
+    const maxPower = Math.ceil(Math.log10(maxValue));
+    return Array.from({ length: maxPower - minPower + 1 }, (_, index) => 10 ** (minPower + index)).filter(
+      (tick) => tick >= minValue && tick <= maxValue
+    );
+  }
+
+  const rawStep = (maxValue - minValue) / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep || 1));
+  const step = Math.max(1, Math.ceil(rawStep / magnitude) * magnitude);
+  const first = Math.ceil(minValue / step) * step;
+  const ticks = Array.from({ length: 6 }, (_, index) => first + index * step).filter((tick) => tick <= maxValue);
+  return ticks.length >= 2 ? ticks : [minValue, maxValue];
 }
 
 function FleetChartTooltip({
@@ -165,24 +207,38 @@ function FleetChartTooltip({
 }
 
 function ChartCard({
-  title, subtitle, icon: Icon, history, metric, scope, unit, isLoading = false,
+  title,
+  subtitle,
+  icon: Icon,
+  history,
+  metric,
+  scope,
+  unit,
+  brushWindow,
+  onBrushChange,
+  showBrush = false,
+  isLoading = false,
 }: {
   title: string; subtitle: string; icon: typeof Activity; history: FleetHistorySeries[];
-  metric: ChartMetricKey; scope: FleetHistoryScope; unit: string; isLoading?: boolean;
+  metric: ChartMetricKey; scope: FleetHistoryScope; unit: string; brushWindow: BrushWindow;
+  onBrushChange: (next: { startIndex?: number; endIndex?: number } | undefined, rowCount: number) => void;
+  showBrush?: boolean; isLoading?: boolean;
 }) {
   const seriesMeta = useMemo(() => getSeriesMeta(history, metric), [history, metric]);
   const rows = useMemo(() => buildChartRows(history, metric), [history, metric]);
-  const logTicks = useMemo(() => getLogTicks(rows, seriesMeta), [rows, seriesMeta]);
   const hasData = rows.length > 0 && seriesMeta.length > 0;
-  const [brushWindow, setBrushWindow] = useState(() => getDefaultBrushWindow(scope, rows.length));
   const safeBrushWindow = useMemo(
     () => normalizeBrushWindow(brushWindow, getDefaultBrushWindow(scope, rows.length), rows.length),
     [brushWindow, rows.length, scope]
   );
-
-  useEffect(() => {
-    setBrushWindow(getDefaultBrushWindow(scope, rows.length));
-  }, [scope, rows.length]);
+  const visibleRows = useMemo(() => rows.slice(safeBrushWindow.startIndex, safeBrushWindow.endIndex + 1), [rows, safeBrushWindow]);
+  const chartRows = showBrush ? rows : visibleRows;
+  const visibleHashrateValues = useMemo(
+    () => getVisibleMetricValues(rows, seriesMeta, safeBrushWindow),
+    [rows, seriesMeta, safeBrushWindow]
+  );
+  const hashrateDomain = useMemo(() => getHashrateDomain(visibleHashrateValues), [visibleHashrateValues]);
+  const hashrateTicks = useMemo(() => getHashrateTicks(hashrateDomain), [hashrateDomain]);
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">
@@ -196,7 +252,7 @@ function ChartCard({
 
       {hasData ? (
         <ResponsiveContainer width="100%" height={420}>
-          <LineChart syncId="fleet-history" data={rows} margin={{ top: 12, right: 28, left: 8, bottom: 20 }}>
+          <LineChart syncId="fleet-history" data={chartRows} margin={{ top: 12, right: 28, left: 8, bottom: 20 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
             <XAxis
               dataKey="timestamp"
@@ -213,9 +269,9 @@ function ChartCard({
               axisLine={false}
               tickLine={false}
               scale={metric === "totalRateThs" ? "log" : "auto"}
-              domain={metric === "totalRateThs" ? [1, "dataMax"] : ["auto", "auto"]}
+              domain={metric === "totalRateThs" ? hashrateDomain : ["auto", "auto"]}
               allowDataOverflow={metric === "totalRateThs"}
-              ticks={metric === "totalRateThs" ? logTicks : undefined}
+              ticks={metric === "totalRateThs" ? hashrateTicks : undefined}
             />
             <Tooltip
               content={<FleetChartTooltip unit={unit} metric={metric} />}
@@ -237,12 +293,12 @@ function ChartCard({
                 animationEasing="ease-out"
               />
             ))}
-            {rows.length > 1 ? (
+            {showBrush && rows.length > 1 ? (
               <Brush
                 dataKey="timestamp"
                 startIndex={safeBrushWindow.startIndex}
                 endIndex={safeBrushWindow.endIndex}
-                onChange={(next) => setBrushWindow((previous) => normalizeBrushWindow(next, previous, rows.length))}
+                onChange={(next) => onBrushChange(next, rows.length)}
                 height={26}
                 travellerWidth={10}
                 stroke="#00f5d4"
@@ -269,13 +325,24 @@ function ChartCard({
 }
 
 export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = false }: FleetHistoryChartsProps) {
+  const rowCount = useMemo(() => getHistoryTimestampCount(history), [history]);
+  const [brushWindow, setBrushWindow] = useState<BrushWindow>(() => getDefaultBrushWindow(scope, rowCount));
+
+  useEffect(() => {
+    setBrushWindow(getDefaultBrushWindow(scope, rowCount));
+  }, [scope, rowCount]);
+
+  const handleBrushChange = (next: { startIndex?: number; endIndex?: number } | undefined, chartRowCount: number) => {
+    setBrushWindow((previous) => normalizeBrushWindow(next, previous, chartRowCount));
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col md:flex-row flex-wrap items-start md:items-center justify-between gap-3 rounded-lg border border-border bg-card p-4">
         <div>
           <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">History Scope</div>
           <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">
-            Hashrate is plotted on a logarithmic scale in TH/s. Use the slider under each chart to move the visible window.
+            Hashrate is plotted on a logarithmic scale in TH/s. The shared slider controls both history charts.
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -303,6 +370,8 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
           metric="totalRateThs"
           scope={scope}
           unit="TH/s"
+          brushWindow={brushWindow}
+          onBrushChange={handleBrushChange}
           isLoading={isLoading}
         />
         <ChartCard
@@ -313,6 +382,9 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
           metric="maxTemp"
           scope={scope}
           unit="C"
+          brushWindow={brushWindow}
+          onBrushChange={handleBrushChange}
+          showBrush={true}
           isLoading={isLoading}
         />
       </div>
