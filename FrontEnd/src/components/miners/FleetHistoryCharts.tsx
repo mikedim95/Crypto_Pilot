@@ -38,6 +38,11 @@ function isFiniteMetricValue(value: number | null | undefined): value is number 
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function isChartMetricValue(value: number | null | undefined, metric: ChartMetricKey): value is number {
+  if (!isFiniteMetricValue(value)) return false;
+  return metric === "totalRateThs" ? value > 0 : true;
+}
+
 function formatAxisTime(value: string, scope: FleetHistoryScope): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "--";
@@ -54,7 +59,7 @@ function formatTooltipTime(value: string): string {
 
 function getSeriesMeta(history: FleetHistorySeries[], metric: ChartMetricKey) {
   return history
-    .filter((series) => series.points.some((point) => isFiniteMetricValue(point[metric])))
+    .filter((series) => series.points.some((point) => isChartMetricValue(point[metric], metric)))
     .map((series, index) => ({
       key: `miner_${series.minerId}`,
       label: `${series.minerName} (${series.minerIp})`,
@@ -72,7 +77,7 @@ function buildChartRows(history: FleetHistorySeries[], metric: ChartMetricKey) {
       if (!Number.isFinite(parsedTime)) continue;
 
       const row = rows.get(point.timestamp) ?? { timestamp: point.timestamp };
-      row[key] = isFiniteMetricValue(point[metric]) ? point[metric] : null;
+      row[key] = isChartMetricValue(point[metric], metric) ? point[metric] : null;
       rows.set(timestamp, row);
     }
   }
@@ -108,6 +113,57 @@ function normalizeBrushWindow(
   return { startIndex: safeEnd, endIndex: safeStart };
 }
 
+function getLogTicks(rows: Array<Record<string, string | number | null>>, seriesMeta: Array<{ key: string }>) {
+  const values = rows.flatMap((row) =>
+    seriesMeta
+      .map((series) => row[series.key])
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0)
+  );
+  if (values.length === 0) return [1, 10, 100];
+
+  const minPower = Math.floor(Math.log10(Math.max(1, Math.min(...values))));
+  const maxPower = Math.max(minPower, Math.floor(Math.log10(Math.max(...values))));
+  return Array.from({ length: maxPower - minPower + 1 }, (_, index) => 10 ** (minPower + index));
+}
+
+function FleetChartTooltip({
+  active,
+  label,
+  payload,
+  unit,
+  metric,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: Array<{ color?: string; name?: string | number; value?: number | string | null }>;
+  unit: string;
+  metric: ChartMetricKey;
+}) {
+  const items =
+    payload?.filter((item): item is { color?: string; name?: string | number; value: number } => typeof item.value === "number") ?? [];
+
+  if (!active || items.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-border bg-[#0f1320] px-3 py-3 font-mono text-xs shadow-xl">
+      <div className="mb-2 whitespace-nowrap text-muted-foreground">{formatTooltipTime(String(label))}</div>
+      <div className="space-y-2">
+        {items.map((item) => {
+          const color = item.color ?? "hsl(var(--foreground))";
+          return (
+            <div key={`${item.name}-${item.value}`} className="flex items-center justify-between gap-6 whitespace-nowrap" style={{ color }}>
+              <span>{item.name}</span>
+              <span>
+                {item.value.toFixed(metric === "totalRateThs" ? 2 : 1)} {unit}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ChartCard({
   title, subtitle, icon: Icon, history, metric, scope, unit, isLoading = false,
 }: {
@@ -116,6 +172,7 @@ function ChartCard({
 }) {
   const seriesMeta = useMemo(() => getSeriesMeta(history, metric), [history, metric]);
   const rows = useMemo(() => buildChartRows(history, metric), [history, metric]);
+  const logTicks = useMemo(() => getLogTicks(rows, seriesMeta), [rows, seriesMeta]);
   const hasData = rows.length > 0 && seriesMeta.length > 0;
   const [brushWindow, setBrushWindow] = useState(() => getDefaultBrushWindow(scope, rows.length));
   const safeBrushWindow = useMemo(
@@ -138,8 +195,8 @@ function ChartCard({
       </div>
 
       {hasData ? (
-        <ResponsiveContainer width="100%" height={280}>
-          <LineChart syncId="fleet-history" data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={420}>
+          <LineChart syncId="fleet-history" data={rows} margin={{ top: 12, right: 28, left: 8, bottom: 20 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
             <XAxis
               dataKey="timestamp"
@@ -152,24 +209,19 @@ function ChartCard({
             <YAxis
               tickFormatter={(value: number) => (metric === "totalRateThs" ? `${value.toFixed(0)} TH` : `${value.toFixed(0)}C`)}
               tick={{ fontSize: 11, fontFamily: "IBM Plex Mono", fill: "hsl(230, 15%, 55%)" }}
-              width={66}
+              width={72}
               axisLine={false}
               tickLine={false}
+              scale={metric === "totalRateThs" ? "log" : "auto"}
+              domain={metric === "totalRateThs" ? [1, "dataMax"] : ["auto", "auto"]}
+              allowDataOverflow={metric === "totalRateThs"}
+              ticks={metric === "totalRateThs" ? logTicks : undefined}
             />
             <Tooltip
-              labelFormatter={(value) => formatTooltipTime(String(value))}
-              contentStyle={{
-                background: "hsl(230, 28%, 8%)",
-                border: "1px solid hsl(231, 18%, 16%)",
-                borderRadius: "6px",
-                fontFamily: "IBM Plex Mono",
-                fontSize: "12px",
-              }}
-              labelStyle={{ color: "hsl(230, 15%, 55%)" }}
-              itemStyle={{ color: "hsl(233, 38%, 92%)" }}
-              formatter={(value: number, name: string) => [`${value.toFixed(metric === "totalRateThs" ? 2 : 1)} ${unit}`, name]}
+              content={<FleetChartTooltip unit={unit} metric={metric} />}
+              wrapperStyle={{ outline: "none" }}
             />
-            <Legend wrapperStyle={{ fontFamily: "IBM Plex Mono", fontSize: "11px", paddingTop: "10px" }} />
+            <Legend wrapperStyle={{ fontFamily: "IBM Plex Mono", fontSize: "11px", paddingTop: "14px" }} />
             {seriesMeta.map((series, idx) => (
               <Line
                 key={series.key}
@@ -201,7 +253,7 @@ function ChartCard({
           </LineChart>
         </ResponsiveContainer>
       ) : (
-        <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-border/80 bg-secondary/20">
+        <div className="flex h-[420px] items-center justify-center rounded-lg border border-dashed border-border/80 bg-secondary/20">
           <div className="max-w-sm text-center">
             <div className="text-sm font-mono text-foreground">
               No historical {metric === "totalRateThs" ? "hashrate" : "temperature"} data yet.
@@ -223,7 +275,7 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
         <div>
           <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">History Scope</div>
           <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">
-            Hashrate is shown consistently per miner in TH/s. Use the slider under each chart to move the visible window.
+            Hashrate is plotted on a logarithmic scale in TH/s. Use the slider under each chart to move the visible window.
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -242,7 +294,7 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
         </div>
       </div>
 
-      <div className="grid gap-4 grid-cols-1 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5">
         <ChartCard
           title="Fleet Hashrate History"
           subtitle="Per-miner hashrate in TH/s from persisted backend snapshots."
