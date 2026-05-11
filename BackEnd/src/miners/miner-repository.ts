@@ -21,10 +21,39 @@ import {
 } from "./types.js";
 import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord, toMysqlDateTime } from "./miner-utils.js";
 
+const DEFAULT_HISTORY_MAX_ROWS_PER_MINER = 500;
+
 function extractErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object") return null;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" && code.trim().length > 0 ? code : null;
+}
+
+function isIgnorableBackfillError(error: unknown): boolean {
+  const code = extractErrorCode(error);
+  return code === "ER_DUP_FIELDNAME" || code === "ER_DUP_KEYNAME";
+}
+
+interface FleetHistoryAccumulator {
+  bucketIndex: number;
+  online: boolean;
+  totalRateSum: number;
+  totalRateCount: number;
+  powerSum: number;
+  powerCount: number;
+  maxBoardTemp: number | null;
+  maxHotspotTemp: number | null;
+}
+
+function validTemperature(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 150 ? value : null;
+}
+
+function maxNullable(values: Array<number | null>): number | null {
+  return values.reduce<number | null>((max, value) => {
+    if (value === null) return max;
+    return max === null ? value : Math.max(max, value);
+  }, null);
 }
 
 export class MinerRepository {
@@ -61,7 +90,7 @@ export class MinerRepository {
         try {
           await conn.query(statement);
         } catch (error) {
-          if (extractErrorCode(error) !== "ER_DUP_FIELDNAME") {
+          if (!isIgnorableBackfillError(error)) {
             throw error;
           }
         }
@@ -443,60 +472,127 @@ export class MinerRepository {
     }
 
     const safeBucketSeconds = Number.isInteger(bucketSeconds) && bucketSeconds > 0 ? bucketSeconds : 60;
-    const placeholders = safeMinerIds.map(() => "?").join(", ");
-    const [rows] = await pool.query<FleetHistoryBucketByMinerRecord[]>(
-      `
-        SELECT
-          miner_id,
-          FLOOR(UNIX_TIMESTAMP(created_at) / ?) AS bucket_index,
-          MAX(CASE WHEN online = 1 THEN 1 ELSE 0 END) AS online,
-          AVG(CASE WHEN total_rate_ths IS NOT NULL THEN total_rate_ths END) AS avg_total_rate_ths,
-          AVG(CASE WHEN power_watts > 0 THEN power_watts END) AS avg_power_watts,
-          NULLIF(
-            MAX(
-              GREATEST(
-                IF(board_temp_1 > 0 AND board_temp_1 <= 150, board_temp_1, -1),
-                IF(board_temp_2 > 0 AND board_temp_2 <= 150, board_temp_2, -1),
-                IF(board_temp_3 > 0 AND board_temp_3 <= 150, board_temp_3, -1)
-              )
-            ),
-            -1
-          ) AS max_board_temp,
-          NULLIF(
-            MAX(
-              GREATEST(
-                IF(hotspot_temp_1 > 0 AND hotspot_temp_1 <= 150, hotspot_temp_1, -1),
-                IF(hotspot_temp_2 > 0 AND hotspot_temp_2 <= 150, hotspot_temp_2, -1),
-                IF(hotspot_temp_3 > 0 AND hotspot_temp_3 <= 150, hotspot_temp_3, -1)
-              )
-            ),
-            -1
-          ) AS max_hotspot_temp
-        FROM miner_status_snapshots
-        WHERE miner_id IN (${placeholders})
-          AND created_at >= ?
-        GROUP BY miner_id, bucket_index
-        ORDER BY miner_id ASC, bucket_index ASC
-      `,
-      [safeBucketSeconds, ...safeMinerIds, toMysqlDateTime(sinceIso)]
+    const maxRowsPerMiner = (() => {
+      const parsed = Number(process.env.MINER_HISTORY_MAX_ROWS_PER_MINER ?? DEFAULT_HISTORY_MAX_ROWS_PER_MINER);
+      return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 20_000) : DEFAULT_HISTORY_MAX_ROWS_PER_MINER;
+    })();
+
+    await Promise.all(
+      safeMinerIds.map(async (minerId) => {
+        const [rows] = await pool.query<MinerSnapshotRecord[]>(
+          `
+            SELECT
+              id,
+              miner_id,
+              online,
+              miner_state,
+              preset_name,
+              preset_pretty,
+              preset_status,
+              total_rate_ths,
+              board_temp_1,
+              board_temp_2,
+              board_temp_3,
+              hotspot_temp_1,
+              hotspot_temp_2,
+              hotspot_temp_3,
+              fan_pwm,
+              fan_rpm_1,
+              fan_rpm_2,
+              fan_rpm_3,
+              fan_rpm_4,
+              power_watts,
+              NULL AS raw_json,
+              created_at
+            FROM miner_status_snapshots FORCE INDEX (idx_miner_status_snapshots_miner_created)
+            WHERE miner_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+          `,
+          [minerId, maxRowsPerMiner]
+        );
+
+        pointsByMinerId.set(minerId, this.mapSnapshotRowsToFleetHistoryPoints(rows, safeBucketSeconds, sinceIso));
+      })
     );
 
+    return pointsByMinerId;
+  }
+
+  private mapSnapshotRowsToFleetHistoryPoints(
+    rows: MinerSnapshotRecord[],
+    bucketSeconds: number,
+    sinceIso: string
+  ): FleetHistoryPoint[] {
+    const buckets = new Map<number, FleetHistoryAccumulator>();
+    const sinceTime = new Date(sinceIso).getTime();
+
     for (const row of rows) {
-      const point = this.mapFleetHistoryBucket(row, safeBucketSeconds);
-      if (!point) {
+      const createdAt = new Date(row.created_at).getTime();
+      if (!Number.isFinite(createdAt)) {
+        continue;
+      }
+      if (Number.isFinite(sinceTime) && createdAt < sinceTime) {
         continue;
       }
 
-      const series = pointsByMinerId.get(row.miner_id);
-      if (series) {
-        series.push(point);
-        continue;
+      const bucketIndex = Math.floor(createdAt / 1000 / bucketSeconds);
+      const existing =
+        buckets.get(bucketIndex) ??
+        {
+          bucketIndex,
+          online: false,
+          totalRateSum: 0,
+          totalRateCount: 0,
+          powerSum: 0,
+          powerCount: 0,
+          maxBoardTemp: null,
+          maxHotspotTemp: null,
+        };
+
+      existing.online = existing.online || row.online === true || row.online === 1;
+      if (typeof row.total_rate_ths === "number" && Number.isFinite(row.total_rate_ths)) {
+        existing.totalRateSum += row.total_rate_ths;
+        existing.totalRateCount += 1;
+      }
+      if (typeof row.power_watts === "number" && Number.isFinite(row.power_watts) && row.power_watts > 0) {
+        existing.powerSum += row.power_watts;
+        existing.powerCount += 1;
       }
 
-      pointsByMinerId.set(row.miner_id, [point]);
+      const maxBoardTemp = maxNullable([
+        validTemperature(row.board_temp_1),
+        validTemperature(row.board_temp_2),
+        validTemperature(row.board_temp_3),
+      ]);
+      const maxHotspotTemp = maxNullable([
+        validTemperature(row.hotspot_temp_1),
+        validTemperature(row.hotspot_temp_2),
+        validTemperature(row.hotspot_temp_3),
+      ]);
+
+      if (maxBoardTemp !== null) {
+        existing.maxBoardTemp = existing.maxBoardTemp === null ? maxBoardTemp : Math.max(existing.maxBoardTemp, maxBoardTemp);
+      }
+      if (maxHotspotTemp !== null) {
+        existing.maxHotspotTemp =
+          existing.maxHotspotTemp === null ? maxHotspotTemp : Math.max(existing.maxHotspotTemp, maxHotspotTemp);
+      }
+
+      buckets.set(bucketIndex, existing);
     }
 
-    return pointsByMinerId;
+    return Array.from(buckets.values())
+      .sort((left, right) => left.bucketIndex - right.bucketIndex)
+      .map((bucket) => ({
+        timestamp: new Date(bucket.bucketIndex * bucketSeconds * 1000).toISOString(),
+        online: bucket.online,
+        totalRateThs: bucket.totalRateCount > 0 ? Number((bucket.totalRateSum / bucket.totalRateCount).toFixed(2)) : null,
+        maxBoardTemp: bucket.maxBoardTemp,
+        maxHotspotTemp: bucket.maxHotspotTemp,
+        maxTemp: bucket.maxHotspotTemp ?? bucket.maxBoardTemp,
+        powerWatts: bucket.powerCount > 0 ? Math.round(bucket.powerSum / bucket.powerCount) : null,
+      }));
   }
 
   async replacePools(minerId: number, pools: MinerPoolPersistInput[]): Promise<MinerPoolEntity[]> {

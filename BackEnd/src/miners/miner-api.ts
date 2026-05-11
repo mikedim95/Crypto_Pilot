@@ -62,6 +62,10 @@ const FLEET_HISTORY_SCOPE_CONFIG = {
 const FLEET_SNAPSHOT_CACHE_TTL_MS = 2_000;
 const FLEET_HISTORY_CACHE_TTL_MS = 5_000;
 const MINERS_LIST_CACHE_TTL_MS = 5_000;
+const LIVE_READ_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.MINER_LIVE_READ_TIMEOUT_MS ?? process.env.MINER_READ_TIMEOUT_MS ?? 20_000);
+  return Number.isFinite(parsed) && parsed >= 5_000 ? Math.round(parsed) : 20_000;
+})();
 
 type FleetHistoryScope = z.infer<typeof fleetHistoryQuerySchema>["scope"];
 
@@ -154,6 +158,19 @@ function createTimedKeyedLoader<K, T>(
 
     return startRefresh(cacheKey, key);
   };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
 }
 
 function isValidTemperature(value: number | null | undefined): value is number {
@@ -318,7 +335,11 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       throw new Error(`Miner ${minerId} was not found.`);
     }
 
-    const readResult = await deps.readService.readMiner(miner);
+    const readResult = await withTimeout(
+      deps.readService.readMiner(miner),
+      LIVE_READ_TIMEOUT_MS,
+      `Miner ${miner.name} (${miner.ip}) live read timed out after ${LIVE_READ_TIMEOUT_MS}ms.`
+    );
     await deps.repository.saveSnapshot({
       minerId,
       online: readResult.liveData.online,
@@ -837,8 +858,15 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
   router.post(
     "/fleet/poll-now",
     asyncHandler(async (_req, res) => {
-      await deps.pollingService.pollOnce();
-      res.json({ success: true });
+      const result = await deps.pollingService.pollOnce();
+      res.status(result.started ? 200 : 409).json(result);
+    })
+  );
+
+  router.get(
+    "/fleet/poll-status",
+    asyncHandler(async (_req, res) => {
+      res.json(deps.pollingService.getStatus());
     })
   );
 

@@ -13,6 +13,40 @@ const TEMP_CONTROL_COOLDOWN_MS = (() => {
   return Math.round(parsed);
 })();
 
+const MINER_READ_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.MINER_READ_TIMEOUT_MS ?? 20_000);
+  if (!Number.isFinite(parsed) || parsed < 5_000) {
+    return 20_000;
+  }
+  return Math.round(parsed);
+})();
+
+export interface MinerPollResult {
+  started: boolean;
+  success: boolean;
+  skippedReason: "already_running" | null;
+  startedAt: string | null;
+  finishedAt: string;
+  durationMs: number;
+  runningForMs: number | null;
+  totalMiners: number;
+  succeeded: number;
+  failed: number;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
 function isValidTemperature(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 150;
 }
@@ -59,6 +93,7 @@ function sortPresetsForPowerScaling(presets: MinerPresetOption[]): MinerPresetOp
 export class MinerPollingService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private runningStartedAt: number | null = null;
   private readonly failureCounts = new Map<number, number>();
 
   constructor(
@@ -203,12 +238,40 @@ export class MinerPollingService {
     });
   }
 
-  async pollOnce(): Promise<void> {
-    if (this.running) return;
+  getStatus(): { running: boolean; startedAt: string | null; runningForMs: number | null } {
+    return {
+      running: this.running,
+      startedAt: this.runningStartedAt ? new Date(this.runningStartedAt).toISOString() : null,
+      runningForMs: this.runningStartedAt ? Date.now() - this.runningStartedAt : null,
+    };
+  }
+
+  async pollOnce(): Promise<MinerPollResult> {
+    const now = Date.now();
+    if (this.running) {
+      return {
+        started: false,
+        success: false,
+        skippedReason: "already_running",
+        startedAt: this.runningStartedAt ? new Date(this.runningStartedAt).toISOString() : null,
+        finishedAt: new Date(now).toISOString(),
+        durationMs: 0,
+        runningForMs: this.runningStartedAt ? now - this.runningStartedAt : null,
+        totalMiners: 0,
+        succeeded: 0,
+        failed: 0,
+      };
+    }
+
     this.running = true;
+    this.runningStartedAt = now;
+    let totalMiners = 0;
+    let succeeded = 0;
+    let failed = 0;
 
     try {
       const miners = await this.repository.listEnabledMiners();
+      totalMiners = miners.length;
       const ingestSnapshots: MinerIngestSnapshot[] = [];
       const safeConcurrency = Math.max(1, Math.floor(this.pollConcurrency));
 
@@ -217,7 +280,11 @@ export class MinerPollingService {
         const batchResults = await Promise.all(
           minerBatch.map(async (miner) => {
             try {
-              const readResult = await this.readService.readMiner(miner);
+              const readResult = await withTimeout(
+                this.readService.readMiner(miner),
+                MINER_READ_TIMEOUT_MS,
+                `Miner ${miner.name} (${miner.ip}) read timed out after ${MINER_READ_TIMEOUT_MS}ms.`
+              );
 
               if (!readResult.httpOk && !readResult.cgminerOk) {
                 throw new Error("Both VNish HTTP and CGMiner reads failed.");
@@ -278,7 +345,10 @@ export class MinerPollingService {
           }
 
           if (result.error) {
+            failed += 1;
             await this.markOfflineAfterFailure(result.miner.id, result.error);
+          } else {
+            succeeded += 1;
           }
         }
       }
@@ -289,8 +359,22 @@ export class MinerPollingService {
           console.error(`[miner-ingest] Failed to publish ${ingestSnapshots.length} miner snapshot(s): ${message}`);
         });
       }
+
+      return {
+        started: true,
+        success: failed === 0,
+        skippedReason: null,
+        startedAt: new Date(now).toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - now,
+        runningForMs: null,
+        totalMiners,
+        succeeded,
+        failed,
+      };
     } finally {
       this.running = false;
+      this.runningStartedAt = null;
     }
   }
 }
