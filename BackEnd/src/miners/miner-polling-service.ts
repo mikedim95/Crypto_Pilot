@@ -21,6 +21,38 @@ const MINER_READ_TIMEOUT_MS = (() => {
   return Math.round(parsed);
 })();
 
+const SNAPSHOT_RETENTION_DAYS = (() => {
+  const parsed = Number(process.env.MINER_SNAPSHOT_RETENTION_DAYS ?? 7);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 7;
+  }
+  return Math.round(parsed);
+})();
+
+const SNAPSHOT_RETENTION_INTERVAL_MS = (() => {
+  const parsed = Number(process.env.MINER_SNAPSHOT_RETENTION_INTERVAL_MS ?? 24 * 60 * 60 * 1000);
+  if (!Number.isFinite(parsed) || parsed < 60 * 60 * 1000) {
+    return 24 * 60 * 60 * 1000;
+  }
+  return Math.round(parsed);
+})();
+
+const SNAPSHOT_PRUNE_BATCH_SIZE = (() => {
+  const parsed = Number(process.env.MINER_SNAPSHOT_PRUNE_BATCH_SIZE ?? 100);
+  if (!Number.isInteger(parsed) || parsed < 10) {
+    return 100;
+  }
+  return Math.min(parsed, 10_000);
+})();
+
+const SNAPSHOT_PRUNE_MAX_BATCHES = (() => {
+  const parsed = Number(process.env.MINER_SNAPSHOT_PRUNE_MAX_BATCHES ?? 5);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return 5;
+  }
+  return Math.min(parsed, 500);
+})();
+
 export interface MinerPollResult {
   started: boolean;
   success: boolean;
@@ -32,6 +64,7 @@ export interface MinerPollResult {
   totalMiners: number;
   succeeded: number;
   failed: number;
+  prunedSnapshots: number;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -94,6 +127,8 @@ export class MinerPollingService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private runningStartedAt: number | null = null;
+  private retentionRunning = false;
+  private lastRetentionRunAt = Date.now();
   private readonly failureCounts = new Map<number, number>();
 
   constructor(
@@ -238,6 +273,47 @@ export class MinerPollingService {
     });
   }
 
+  private startOldSnapshotPruneIfDue(): void {
+    const now = Date.now();
+    if (
+      SNAPSHOT_RETENTION_DAYS < 1 ||
+      this.retentionRunning ||
+      now - this.lastRetentionRunAt < SNAPSHOT_RETENTION_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    this.lastRetentionRunAt = now;
+    this.retentionRunning = true;
+
+    void (async () => {
+      const cutoffIso = new Date(now - SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      let totalDeleted = 0;
+
+      try {
+        for (let batch = 0; batch < SNAPSHOT_PRUNE_MAX_BATCHES; batch += 1) {
+          const deleted = await this.repository.pruneSnapshotsBefore(cutoffIso, SNAPSHOT_PRUNE_BATCH_SIZE);
+          totalDeleted += deleted;
+          if (deleted === 0) {
+            break;
+          }
+        }
+
+        if (totalDeleted > 0) {
+          console.info(
+            `[miner-retention] Deleted ${totalDeleted} snapshot(s) older than ${cutoffIso} ` +
+              `(retention ${SNAPSHOT_RETENTION_DAYS} day${SNAPSHOT_RETENTION_DAYS === 1 ? "" : "s"}).`
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown retention cleanup error.";
+        console.error(`[miner-retention] Failed to prune old snapshots: ${message}`);
+      } finally {
+        this.retentionRunning = false;
+      }
+    })();
+  }
+
   getStatus(): { running: boolean; startedAt: string | null; runningForMs: number | null } {
     return {
       running: this.running,
@@ -260,6 +336,7 @@ export class MinerPollingService {
         totalMiners: 0,
         succeeded: 0,
         failed: 0,
+        prunedSnapshots: 0,
       };
     }
 
@@ -360,6 +437,8 @@ export class MinerPollingService {
         });
       }
 
+      this.startOldSnapshotPruneIfDue();
+
       return {
         started: true,
         success: failed === 0,
@@ -371,6 +450,7 @@ export class MinerPollingService {
         totalMiners,
         succeeded,
         failed,
+        prunedSnapshots: 0,
       };
     } finally {
       this.running = false;

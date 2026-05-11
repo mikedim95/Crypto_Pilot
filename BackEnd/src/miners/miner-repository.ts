@@ -22,6 +22,7 @@ import {
 import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord, toMysqlDateTime } from "./miner-utils.js";
 
 const DEFAULT_HISTORY_MAX_ROWS_PER_MINER = 500;
+const DEFAULT_SNAPSHOT_PRUNE_BATCH_SIZE = 100;
 
 function extractErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object") return null;
@@ -407,6 +408,33 @@ export class MinerRepository {
       [minerId, toMysqlDateTime(sinceIso)]
     );
     return rows.map(mapSnapshotRecord);
+  }
+
+  async pruneSnapshotsBefore(cutoffIso: string, batchSize = DEFAULT_SNAPSHOT_PRUNE_BATCH_SIZE): Promise<number> {
+    await this.init();
+
+    const safeBatchSize =
+      Number.isInteger(batchSize) && batchSize > 0
+        ? Math.min(batchSize, 10_000)
+        : DEFAULT_SNAPSHOT_PRUNE_BATCH_SIZE;
+    const miners = await this.listMiners();
+    let deleted = 0;
+
+    for (const miner of miners) {
+      const [result] = await pool.query(
+        `
+          DELETE FROM miner_status_snapshots
+          WHERE miner_id = ?
+            AND created_at < ?
+          ORDER BY created_at ASC
+          LIMIT ?
+        `,
+        [miner.id, toMysqlDateTime(cutoffIso), safeBatchSize]
+      );
+      deleted += Number((result as { affectedRows?: number }).affectedRows ?? 0);
+    }
+
+    return deleted;
   }
 
   async listHistoryBucketsSince(minerId: number, sinceIso: string, bucketSeconds: number): Promise<FleetHistoryPoint[]> {

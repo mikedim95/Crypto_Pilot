@@ -711,7 +711,6 @@ export function liveDataToSnapshotRaw(liveData: MinerLiveData): Record<string, u
     chainStates: liveData.chainStates,
     poolActiveIndex: liveData.poolActiveIndex,
     pools: liveData.pools,
-    raw: liveData.raw ?? null,
   };
 }
 
