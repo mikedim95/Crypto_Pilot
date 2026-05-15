@@ -470,9 +470,18 @@ export function TopBar({
         setIsNotificationsOpen(false);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsNotificationsOpen(false);
+      }
+    };
 
     document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [isNotificationsOpen]);
 
   useEffect(() => {
@@ -613,7 +622,7 @@ export function TopBar({
             </button>
 
             {isNotificationsOpen ? (
-              <div className="fixed right-3 top-16 z-[1000] w-[min(28rem,calc(100vw-1rem))] overflow-hidden rounded-md border border-border/90 bg-[#0d111d]/98 shadow-[0_28px_90px_rgba(0,0,0,0.58)] backdrop-blur-xl md:right-5">
+              <div className="fixed left-2 right-2 top-16 z-[1000] w-auto overflow-hidden rounded-lg border border-border/90 bg-[#0d111d] shadow-[0_28px_90px_rgba(0,0,0,0.72)] backdrop-blur-xl md:left-auto md:right-5 md:w-[min(28rem,calc(100vw-1rem))]">
                 <div className="border-b border-border/80 px-4 py-3">
                   <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Fleet Alerts</div>
                   <div className="mt-1 text-sm font-mono text-foreground">
@@ -621,7 +630,7 @@ export function TopBar({
                   </div>
                 </div>
 
-                <div className="max-h-[24rem] overflow-y-auto">
+                <div className="max-h-[calc(100svh-9rem)] overflow-y-auto md:max-h-[24rem]">
                   {loadingThermalReports && timelineAlerts.length === 0 ? (
                     <div className="px-4 py-5 text-sm font-mono text-muted-foreground">Loading reports...</div>
                   ) : thermalEndpointMissing && timelineAlerts.length === 0 ? (

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Activity, Flame, Loader2, TrendingUp } from "lucide-react";
 import { Brush, CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import type { FleetHistoryScope, FleetHistorySeries, MinerTimelineAlert } from "@/types/api";
 
@@ -183,8 +184,9 @@ function findNearestRowIndex(rows: Array<{ timestamp?: unknown }>, timestamp: st
   return nearestDistance === Number.POSITIVE_INFINITY ? null : nearestIndex;
 }
 
-function referenceLabel(alert: MinerTimelineAlert | null | undefined): string {
-  return alert ? `${alert.emoji} ${formatAxisTime(alert.timestamp, "hour")}` : "";
+function referenceLabel(alert: MinerTimelineAlert | null | undefined, compact = false): string {
+  if (!alert) return "";
+  return compact ? alert.emoji : `${alert.emoji} ${formatAxisTime(alert.timestamp, "hour")}`;
 }
 
 function getVisibleMetricValues(
@@ -311,6 +313,7 @@ function FleetRateChartCard({
   selectedAlert?: MinerTimelineAlert | null;
   isLoading?: boolean;
 }) {
+  const isMobile = useIsMobile();
   const rows = useMemo(() => buildFleetRateRows(history), [history]);
   const safeBrushWindow = useMemo(
     () => normalizeBrushWindow(brushWindow, getDefaultBrushWindow(scope, rows.length), rows.length),
@@ -324,11 +327,16 @@ function FleetRateChartCard({
     highlightedIndex !== null && highlightedIndex >= safeBrushWindow.startIndex && highlightedIndex <= safeBrushWindow.endIndex
       ? rows[highlightedIndex]?.timestamp
       : null;
+  const tickStyle = {
+    fontSize: isMobile ? 10 : 11,
+    fontFamily: "IBM Plex Mono",
+    fill: "hsl(230, 15%, 55%)",
+  };
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div>
+    <div className="rounded-lg border border-border bg-card p-3 animate-fade-up sm:p-4">
+      <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4 sm:gap-4">
+        <div className="min-w-0">
           <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Overall Fleet Rate</div>
           <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">
             Total persisted fleet hashrate in TH/s across all online miners.
@@ -338,52 +346,58 @@ function FleetRateChartCard({
       </div>
 
       {hasData ? (
-        <ResponsiveContainer width="100%" height={280}>
-          <LineChart syncId="fleet-history" data={visibleRows} margin={{ top: 12, right: 28, left: 8, bottom: 12 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-            <XAxis
-              dataKey="timestamp"
-              tickFormatter={(value) => formatAxisTime(String(value), scope)}
-              minTickGap={24}
-              tick={{ fontSize: 11, fontFamily: "IBM Plex Mono", fill: "hsl(230, 15%, 55%)" }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tickFormatter={(value: number) => `${value.toFixed(0)} TH`}
-              tick={{ fontSize: 11, fontFamily: "IBM Plex Mono", fill: "hsl(230, 15%, 55%)" }}
-              width={72}
-              axisLine={false}
-              tickLine={false}
-              domain={rateDomain}
-            />
-            <Tooltip content={<FleetRateTooltip />} wrapperStyle={{ outline: "none" }} />
-            {highlightedTimestamp ? (
-              <ReferenceLine
-                x={highlightedTimestamp}
-                stroke={selectedAlert?.color ?? "#00f5d4"}
-                strokeDasharray="4 4"
-                strokeWidth={2}
-                label={{ value: referenceLabel(selectedAlert), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: 11 }}
+        <div className="h-[220px] sm:h-[280px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              syncId="fleet-history"
+              data={visibleRows}
+              margin={isMobile ? { top: 10, right: 10, left: 0, bottom: 8 } : { top: 12, right: 28, left: 8, bottom: 12 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
+              <XAxis
+                dataKey="timestamp"
+                tickFormatter={(value) => formatAxisTime(String(value), scope)}
+                minTickGap={isMobile ? 16 : 24}
+                tick={tickStyle}
+                axisLine={false}
+                tickLine={false}
               />
-            ) : null}
-            <Line
-              type="monotone"
-              dataKey="totalRateThs"
-              name="Fleet Rate"
-              stroke="#00f5d4"
-              strokeWidth={2.5}
-              dot={false}
-              connectNulls={false}
-              isAnimationActive={true}
-              animationDuration={900}
-              animationEasing="ease-out"
-            />
-          </LineChart>
-        </ResponsiveContainer>
+              <YAxis
+                tickFormatter={(value: number) => `${value.toFixed(0)} TH`}
+                tick={tickStyle}
+                width={isMobile ? 48 : 72}
+                axisLine={false}
+                tickLine={false}
+                domain={rateDomain}
+              />
+              <Tooltip content={<FleetRateTooltip />} wrapperStyle={{ outline: "none" }} />
+              {highlightedTimestamp ? (
+                <ReferenceLine
+                  x={highlightedTimestamp}
+                  stroke={selectedAlert?.color ?? "#00f5d4"}
+                  strokeDasharray="4 4"
+                  strokeWidth={2}
+                  label={{ value: referenceLabel(selectedAlert, isMobile), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: isMobile ? 10 : 11 }}
+                />
+              ) : null}
+              <Line
+                type="monotone"
+                dataKey="totalRateThs"
+                name="Fleet Rate"
+                stroke="#00f5d4"
+                strokeWidth={2.5}
+                dot={false}
+                connectNulls={false}
+                isAnimationActive={true}
+                animationDuration={900}
+                animationEasing="ease-out"
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
       ) : (
-        <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-border/80 bg-secondary/20">
-          <div className="max-w-sm text-center">
+        <div className="flex h-[220px] items-center justify-center rounded-lg border border-dashed border-border/80 bg-secondary/20 sm:h-[280px]">
+          <div className="max-w-sm px-4 text-center">
             <div className="text-sm font-mono text-foreground">No overall fleet hashrate data yet.</div>
             <div className="mt-2 text-xs font-mono text-muted-foreground">
               The chart fills automatically as miner snapshots are written into MySQL by the fleet poller.
@@ -415,6 +429,7 @@ function ChartCard({
   selectedAlert?: MinerTimelineAlert | null;
   showBrush?: boolean; isLoading?: boolean;
 }) {
+  const isMobile = useIsMobile();
   const seriesMeta = useMemo(() => getSeriesMeta(history, metric), [history, metric]);
   const rows = useMemo(() => buildChartRows(history, metric), [history, metric]);
   const hasData = rows.length > 0 && seriesMeta.length > 0;
@@ -435,11 +450,16 @@ function ChartCard({
     highlightedIndex !== null && highlightedIndex >= safeBrushWindow.startIndex && highlightedIndex <= safeBrushWindow.endIndex
       ? rows[highlightedIndex]?.timestamp
       : null;
+  const tickStyle = {
+    fontSize: isMobile ? 10 : 11,
+    fontFamily: "IBM Plex Mono",
+    fill: "hsl(230, 15%, 55%)",
+  };
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div>
+    <div className="rounded-lg border border-border bg-card p-3 animate-fade-up sm:p-4">
+      <div className="mb-3 flex items-start justify-between gap-3 sm:mb-4 sm:gap-4">
+        <div className="min-w-0">
           <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">{title}</div>
           <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">{subtitle}</div>
         </div>
@@ -447,75 +467,81 @@ function ChartCard({
       </div>
 
       {hasData ? (
-        <ResponsiveContainer width="100%" height={420}>
-          <LineChart syncId="fleet-history" data={chartRows} margin={{ top: 12, right: 28, left: 8, bottom: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-            <XAxis
-              dataKey="timestamp"
-              tickFormatter={(value) => formatAxisTime(String(value), scope)}
-              minTickGap={24}
-              tick={{ fontSize: 11, fontFamily: "IBM Plex Mono", fill: "hsl(230, 15%, 55%)" }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tickFormatter={(value: number) => (metric === "totalRateThs" ? `${value.toFixed(0)} TH` : `${value.toFixed(0)}C`)}
-              tick={{ fontSize: 11, fontFamily: "IBM Plex Mono", fill: "hsl(230, 15%, 55%)" }}
-              width={72}
-              axisLine={false}
-              tickLine={false}
-              scale={metric === "totalRateThs" ? "log" : "auto"}
-              domain={metric === "totalRateThs" ? hashrateDomain : ["auto", "auto"]}
-              allowDataOverflow={metric === "totalRateThs"}
-              ticks={metric === "totalRateThs" ? hashrateTicks : undefined}
-            />
-            <Tooltip
-              content={<FleetChartTooltip unit={unit} metric={metric} />}
-              wrapperStyle={{ outline: "none" }}
-            />
-            <Legend wrapperStyle={{ fontFamily: "IBM Plex Mono", fontSize: "11px", paddingTop: "14px" }} />
-            {highlightedTimestamp ? (
-              <ReferenceLine
-                x={highlightedTimestamp}
-                stroke={selectedAlert?.color ?? "#00f5d4"}
-                strokeDasharray="4 4"
-                strokeWidth={2}
-                label={{ value: referenceLabel(selectedAlert), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: 11 }}
-              />
-            ) : null}
-            {seriesMeta.map((series, idx) => (
-              <Line
-                key={series.key}
-                type="monotone"
-                dataKey={series.key}
-                name={series.label}
-                stroke={series.color}
-                strokeWidth={2}
-                dot={false}
-                connectNulls={false}
-                isAnimationActive={true}
-                animationDuration={1200 + idx * 200}
-                animationEasing="ease-out"
-              />
-            ))}
-            {showBrush && rows.length > 1 ? (
-              <Brush
+        <div className="h-[300px] sm:h-[420px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              syncId="fleet-history"
+              data={chartRows}
+              margin={isMobile ? { top: 10, right: 10, left: 0, bottom: showBrush ? 16 : 8 } : { top: 12, right: 28, left: 8, bottom: 20 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
+              <XAxis
                 dataKey="timestamp"
-                startIndex={safeBrushWindow.startIndex}
-                endIndex={safeBrushWindow.endIndex}
-                onChange={(next) => onBrushChange(next, rows.length)}
-                height={26}
-                travellerWidth={10}
-                stroke="#00f5d4"
-                fill="rgba(10, 14, 26, 0.9)"
                 tickFormatter={(value) => formatAxisTime(String(value), scope)}
+                minTickGap={isMobile ? 16 : 24}
+                tick={tickStyle}
+                axisLine={false}
+                tickLine={false}
               />
-            ) : null}
-          </LineChart>
-        </ResponsiveContainer>
+              <YAxis
+                tickFormatter={(value: number) => (metric === "totalRateThs" ? `${value.toFixed(0)} TH` : `${value.toFixed(0)}C`)}
+                tick={tickStyle}
+                width={isMobile ? 48 : 72}
+                axisLine={false}
+                tickLine={false}
+                scale={metric === "totalRateThs" ? "log" : "auto"}
+                domain={metric === "totalRateThs" ? hashrateDomain : ["auto", "auto"]}
+                allowDataOverflow={metric === "totalRateThs"}
+                ticks={metric === "totalRateThs" ? hashrateTicks : undefined}
+              />
+              <Tooltip
+                content={<FleetChartTooltip unit={unit} metric={metric} />}
+                wrapperStyle={{ outline: "none" }}
+              />
+              {!isMobile ? <Legend wrapperStyle={{ fontFamily: "IBM Plex Mono", fontSize: "11px", paddingTop: "14px" }} /> : null}
+              {highlightedTimestamp ? (
+                <ReferenceLine
+                  x={highlightedTimestamp}
+                  stroke={selectedAlert?.color ?? "#00f5d4"}
+                  strokeDasharray="4 4"
+                  strokeWidth={2}
+                  label={{ value: referenceLabel(selectedAlert, isMobile), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: isMobile ? 10 : 11 }}
+                />
+              ) : null}
+              {seriesMeta.map((series, idx) => (
+                <Line
+                  key={series.key}
+                  type="monotone"
+                  dataKey={series.key}
+                  name={series.label}
+                  stroke={series.color}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={true}
+                  animationDuration={1200 + idx * 200}
+                  animationEasing="ease-out"
+                />
+              ))}
+              {showBrush && rows.length > 1 ? (
+                <Brush
+                  dataKey="timestamp"
+                  startIndex={safeBrushWindow.startIndex}
+                  endIndex={safeBrushWindow.endIndex}
+                  onChange={(next) => onBrushChange(next, rows.length)}
+                  height={isMobile ? 22 : 26}
+                  travellerWidth={isMobile ? 8 : 10}
+                  stroke="#00f5d4"
+                  fill="rgba(10, 14, 26, 0.9)"
+                  tickFormatter={(value) => formatAxisTime(String(value), scope)}
+                />
+              ) : null}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
       ) : (
-        <div className="flex h-[420px] items-center justify-center rounded-lg border border-dashed border-border/80 bg-secondary/20">
-          <div className="max-w-sm text-center">
+        <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-border/80 bg-secondary/20 sm:h-[420px]">
+          <div className="max-w-sm px-4 text-center">
             <div className="text-sm font-mono text-foreground">
               No historical {metric === "totalRateThs" ? "hashrate" : "temperature"} data yet.
             </div>
@@ -550,26 +576,26 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
 
   return (
     <div id="fleet-history-charts" className="space-y-4 scroll-mt-20">
-      <div className="flex flex-col md:flex-row flex-wrap items-start md:items-center justify-between gap-3 rounded-lg border border-border bg-card p-4">
-        <div>
+      <div className="flex flex-col flex-wrap items-stretch justify-between gap-3 rounded-lg border border-border bg-card p-3 sm:p-4 md:flex-row md:items-center">
+        <div className="min-w-0">
           <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">History Scope</div>
           <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">
             Hashrate is plotted on a logarithmic scale in TH/s. The shared slider controls both history charts.
           </div>
           {selectedAlert ? (
-            <div className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-xs font-mono" style={{ borderColor: selectedAlert.color, color: selectedAlert.color }}>
-              <span>{selectedAlert.emoji}</span>
-              <span className="truncate">{selectedAlert.title} at {formatTooltipTime(selectedAlert.timestamp)}</span>
+            <div className="mt-3 flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-xs font-mono" style={{ borderColor: selectedAlert.color, color: selectedAlert.color }}>
+              <span className="shrink-0">{selectedAlert.emoji}</span>
+              <span className="min-w-0 truncate">{selectedAlert.title} at {formatTooltipTime(selectedAlert.timestamp)}</span>
             </div>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid w-full grid-cols-4 gap-2 sm:w-auto sm:flex sm:flex-wrap">
           {SCOPE_OPTIONS.map((option) => (
             <Button
               key={option.value}
               type="button"
               variant={scope === option.value ? "default" : "outline"}
-              className={cn("font-mono text-sm", scope === option.value ? "shadow-[0_0_0_1px_rgba(0,245,212,0.35)_inset]" : "")}
+              className={cn("h-9 px-2 font-mono text-xs sm:px-4 sm:text-sm", scope === option.value ? "shadow-[0_0_0_1px_rgba(0,245,212,0.35)_inset]" : "")}
               onClick={() => onScopeChange(option.value)}
               disabled={isLoading}
             >
@@ -579,7 +605,7 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5">
+      <div className="grid grid-cols-1 gap-4 sm:gap-5">
         <FleetRateChartCard history={history} scope={scope} brushWindow={brushWindow} selectedAlert={selectedAlert} isLoading={isLoading} />
         <ChartCard
           title="Fleet Hashrate History"

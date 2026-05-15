@@ -269,17 +269,17 @@ export function AsicMinersPage({ selectedAlert = null }: AsicMinersPageProps) {
   };
 
   return (
-    <div className="space-y-6 p-4 md:p-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div>
+    <div className="space-y-4 p-3 sm:p-4 md:space-y-6 md:p-6">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
           <h2 className="text-lg md:text-xl font-mono font-semibold text-foreground">VNish Fleet</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 hidden text-sm text-muted-foreground sm:block">
             Manual miner onboarding, backend verification, live telemetry, command execution, and persisted fleet state.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Button variant="outline" className="gap-2 font-mono text-sm" onClick={() => invalidateMinerQueries()}>
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center sm:gap-3">
+          <Button variant="outline" className="w-full justify-center gap-2 font-mono text-sm sm:w-auto" onClick={() => invalidateMinerQueries()}>
             <RefreshCcw className="h-4 w-4" />
             Refresh
           </Button>
@@ -296,7 +296,7 @@ export function AsicMinersPage({ selectedAlert = null }: AsicMinersPageProps) {
       <FleetOverviewCards overview={overview} isLoading={isOverviewLoading} />
 
       {errorMessages.length > 0 ? (
-        <div className="rounded-lg border border-negative/40 bg-negative/10 p-4 text-sm text-negative animate-fade-up">
+        <div className="rounded-lg border border-negative/40 bg-negative/10 p-3 text-sm text-negative animate-fade-up sm:p-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-4 w-4" />
             <div>{errorMessages.join(" ")}</div>
@@ -312,9 +312,9 @@ export function AsicMinersPage({ selectedAlert = null }: AsicMinersPageProps) {
         selectedAlert={selectedAlert}
       />
 
-      <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">
+      <div className="rounded-lg border border-border bg-card p-3 animate-fade-up sm:p-4">
         <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div>
+          <div className="min-w-0">
             <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Fleet Dashboard</div>
             {isTableLoading ? (
               <Skeleton className="mt-2 h-5 w-32" />
@@ -324,7 +324,7 @@ export function AsicMinersPage({ selectedAlert = null }: AsicMinersPageProps) {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex w-full flex-col items-stretch gap-2 sm:flex-row sm:items-center xl:w-auto xl:justify-end">
             <BulkActionToolbar
               count={selectedMinerIds.length}
               isPending={bulkCommandMutation.isPending}

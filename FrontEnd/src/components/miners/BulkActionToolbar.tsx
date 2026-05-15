@@ -21,15 +21,15 @@ export function BulkActionToolbar({ count, isPending = false, onAction, onClear 
   if (count === 0) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2">
-      <span className="text-xs font-mono font-semibold text-primary">{count} selected</span>
-      <div className="mx-1 h-4 w-px bg-border" />
+    <div className="grid w-full grid-cols-2 gap-2 rounded-lg border border-primary/30 bg-primary/5 p-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:px-4 sm:py-2">
+      <span className="col-span-2 text-xs font-mono font-semibold text-primary sm:col-span-1">{count} selected</span>
+      <div className="mx-1 hidden h-4 w-px bg-border sm:block" />
       {bulkActions.map(({ action, icon: Icon, label }) => (
         <Button
           key={action}
           variant="ghost"
           size="sm"
-          className="h-8 gap-1 px-2 font-mono text-[11px]"
+          className="h-8 justify-center gap-1 px-2 font-mono text-[11px]"
           disabled={isPending}
           onClick={() => onAction(action)}
         >
@@ -40,7 +40,7 @@ export function BulkActionToolbar({ count, isPending = false, onAction, onClear 
       <Button
         variant="outline"
         size="sm"
-        className="ml-auto h-8 gap-1 px-2 font-mono text-[11px]"
+        className="col-span-2 h-8 justify-center gap-1 px-2 font-mono text-[11px] sm:col-span-1 sm:ml-auto"
         disabled={isPending}
         onClick={onClear}
       >

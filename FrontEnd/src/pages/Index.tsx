@@ -41,8 +41,8 @@ const Index = ({ session, onLogout }: IndexProps) => {
           workspaceMode="asic-only"
           onMinerAlertSelect={setSelectedMinerAlert}
         />
-        <main className="flex-1 overflow-y-auto">
-          <div key={currentPage} className="page-enter">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          <div key={currentPage} className="page-enter min-w-0">
             {renderPage()}
           </div>
         </main>
