@@ -22,6 +22,7 @@ const EMPTY_FLEET_LIVE: MinerLiveData[] = [];
 
 interface AsicMinersPageProps {
   selectedAlert?: MinerTimelineAlert | null;
+  onOpenMinerWeb?: (minerId: number) => void;
 }
 
 function scopeForTimestamp(timestamp: string): FleetHistoryScope {
@@ -34,7 +35,7 @@ function scopeForTimestamp(timestamp: string): FleetHistoryScope {
   return "month";
 }
 
-export function AsicMinersPage({ selectedAlert = null }: AsicMinersPageProps) {
+export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMinersPageProps) {
   const queryClient = useQueryClient();
   const [selectedMinerId, setSelectedMinerId] = useState<number | undefined>();
   const [selectedMinerIds, setSelectedMinerIds] = useState<number[]>([]);
@@ -359,6 +360,10 @@ export function AsicMinersPage({ selectedAlert = null }: AsicMinersPageProps) {
           isThermalSettingsPending={thermalSettingsMutation.isPending}
           onClose={() => setSelectedMinerId(undefined)}
           onCommand={(action) => commandMutation.mutate({ minerId: selectedMinerDetails.miner.id, action })}
+          onOpenLivePage={(minerId) => {
+            setSelectedMinerId(undefined);
+            onOpenMinerWeb?.(minerId);
+          }}
           onSwitchPool={(poolId) => switchPoolMutation.mutate({ minerId: selectedMinerDetails.miner.id, poolId })}
           onApplyPreset={(preset) => presetMutation.mutate({ minerId: selectedMinerDetails.miner.id, preset })}
           onSaveThermalSettings={(settings) =>

@@ -4,6 +4,7 @@ import { SettingsModal } from "@/components/SettingsModal";
 import { TopBar } from "@/components/TopBar";
 import { ProfileModal } from "@/components/ProfileModal";
 import { AsicMinersPage } from "@/pages/AsicMinersPage";
+import { MinerWebPage } from "@/pages/MinerWebPage";
 import type { AppSession, MinerTimelineAlert, PortfolioAccountType } from "@/types/api";
 
 interface IndexProps {
@@ -17,6 +18,7 @@ const Index = ({ session, onLogout }: IndexProps) => {
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedMinerAlert, setSelectedMinerAlert] = useState<MinerTimelineAlert | null>(null);
+  const [selectedWebMinerId, setSelectedWebMinerId] = useState<number | undefined>();
 
   const handleNavigate = (page: string) => {
     if (page === "asic-miners") {
@@ -25,7 +27,27 @@ const Index = ({ session, onLogout }: IndexProps) => {
   };
 
   const renderPage = () => {
-    return <AsicMinersPage selectedAlert={selectedMinerAlert} />;
+    if (currentPage === "miner-web") {
+      return (
+        <MinerWebPage
+          minerId={selectedWebMinerId}
+          onBack={() => {
+            setSelectedWebMinerId(undefined);
+            setCurrentPage("asic-miners");
+          }}
+        />
+      );
+    }
+
+    return (
+      <AsicMinersPage
+        selectedAlert={selectedMinerAlert}
+        onOpenMinerWeb={(minerId) => {
+          setSelectedWebMinerId(minerId);
+          setCurrentPage("miner-web");
+        }}
+      />
+    );
   };
 
   return (

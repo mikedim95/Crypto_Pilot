@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, RotateCcw, Gauge, Square, Play, Pause, Power, X } from "lucide-react";
+import { ExternalLink, Loader2, RotateCcw, Gauge, Square, Play, Pause, Power, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,6 +15,7 @@ interface MinerDetailPanelProps {
   isThermalSettingsPending: boolean;
   onClose: () => void;
   onCommand: (action: "restart" | "reboot" | "start" | "stop" | "pause" | "resume") => void;
+  onOpenLivePage: (minerId: number) => void;
   onSwitchPool: (poolId: number) => void;
   onApplyPreset: (preset: string) => void;
   onSaveThermalSettings: (settings: {
@@ -55,6 +56,7 @@ export function MinerDetailPanel({
   isThermalSettingsPending,
   onClose,
   onCommand,
+  onOpenLivePage,
   onSwitchPool,
   onApplyPreset,
   onSaveThermalSettings,
@@ -109,7 +111,7 @@ export function MinerDetailPanel({
       >
         <div className="sticky top-0 z-10 border-b border-border bg-card/95 p-4 backdrop-blur">
           <div className="flex items-start justify-between gap-4">
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-3">
                 <h2 className="font-mono text-lg font-semibold text-foreground">{miner.name}</h2>
                 <MinerStatusBadge online={liveData.online} minerState={liveData.minerState} />
@@ -118,9 +120,16 @@ export function MinerDetailPanel({
                 {miner.model ?? "Unknown model"} | {miner.ip} | {miner.firmware ?? "Unknown firmware"}
               </div>
             </div>
-            <Button variant="ghost" size="icon" onClick={onClose}>
-              <X className="h-5 w-5" />
-            </Button>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="outline" className="gap-2 font-mono text-xs" onClick={() => onOpenLivePage(miner.id)}>
+                <ExternalLink className="h-4 w-4" />
+                <span className="hidden sm:inline">Open Live Page</span>
+                <span className="sm:hidden">Live</span>
+              </Button>
+              <Button variant="ghost" size="icon" onClick={onClose}>
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
           </div>
         </div>
 
