@@ -26,14 +26,14 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { id: "portfolio", label: "Portfolio", icon: Briefcase },
-  { id: "wallet", label: "Wallet", icon: Wallet },
-  { id: "exchange-intelligence", label: "Exchanges", icon: ArrowLeftRight },
-  { id: "execution-simulator", label: "Execution Sim", icon: PlaySquare },
-  { id: "strategies", label: "Strategies", icon: Bot },
-  { id: "intelligence", label: "Intelligence", icon: BrainCircuit },
-  { id: "asic-miners", label: "ASIC Miners", icon: HardDrive },
-  { id: "nicehash", label: "NiceHash", icon: Cpu },
+  { id: "asic-miners", label: "ASIC Miners", icon: HardDrive, locked: false },
+  { id: "portfolio", label: "Portfolio", icon: Briefcase, locked: true },
+  { id: "wallet", label: "Wallet", icon: Wallet, locked: true },
+  { id: "exchange-intelligence", label: "Exchanges", icon: ArrowLeftRight, locked: true },
+  { id: "execution-simulator", label: "Execution Sim", icon: PlaySquare, locked: true },
+  { id: "strategies", label: "Strategies", icon: Bot, locked: true },
+  { id: "intelligence", label: "Intelligence", icon: BrainCircuit, locked: true },
+  { id: "nicehash", label: "NiceHash", icon: Cpu, locked: true },
 ];
 
 const comingSoon = [
@@ -48,6 +48,7 @@ export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleNavigate = (page: string) => {
+    if (page !== "asic-miners") return;
     onNavigate(page);
     if (isMobile) setMobileOpen(false);
   };
@@ -80,20 +81,30 @@ export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
 
         {navItems.map((item) => {
           const active = currentPage === item.id;
+          const locked = item.locked;
           return (
             <button
               key={item.id}
               onClick={() => handleNavigate(item.id)}
+              disabled={locked}
+              title={locked ? "Locked while ASIC Miners is the active workspace." : undefined}
               className={cn(
                 "w-full flex items-center gap-3 rounded-md text-sm transition-all duration-300 ease-out transform-gpu",
                 collapsed && !isMobile ? "justify-center px-2 py-3" : "px-3 py-3",
-                active
+                locked
+                  ? "cursor-not-allowed opacity-40 text-muted-foreground"
+                  : active
                   ? "bg-secondary text-foreground shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]"
                   : "text-muted-foreground hover:text-foreground hover:bg-secondary/50 hover:translate-x-1"
               )}
             >
               <item.icon className="h-[18px] w-[18px] shrink-0" />
-              {(isMobile || !collapsed) && <span className="font-mono text-sm">{item.label}</span>}
+              {(isMobile || !collapsed) && (
+                <>
+                  <span className="font-mono text-sm">{item.label}</span>
+                  {locked ? <Lock className="h-3.5 w-3.5 ml-auto text-muted-foreground" /> : null}
+                </>
+              )}
             </button>
           );
         })}
