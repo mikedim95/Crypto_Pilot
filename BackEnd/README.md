@@ -56,6 +56,7 @@ The Pi backend remains the local poller for VNish/CGMiner data. If you also want
 
 - `MINER_INGEST_URL`
 - `MINER_INGEST_TOKEN`
+- `MINER_POLL_MS` (default/minimum: `60000`, one ASIC fleet poll per minute)
 - `MINER_PUSH_SOURCE` (default: `pi`)
 - `MINER_PUSH_TIMEOUT_MS` (default: `8000`)
 

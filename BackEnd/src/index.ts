@@ -82,8 +82,10 @@ const corsOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:8080")
   .filter(Boolean);
 const rawSchedulerPollMs = Number(process.env.STRATEGY_SCHEDULER_POLL_MS ?? 15_000);
 const schedulerPollMs = Number.isFinite(rawSchedulerPollMs) && rawSchedulerPollMs >= 5_000 ? rawSchedulerPollMs : 15_000;
-const rawMinerPollMs = Number(process.env.MINER_POLL_MS ?? 15_000);
-const minerPollMs = Number.isFinite(rawMinerPollMs) && rawMinerPollMs >= 5_000 ? rawMinerPollMs : 15_000;
+const minMinerPollMs = 60_000;
+const rawMinerPollMs = Number(process.env.MINER_POLL_MS ?? 60_000);
+const minerPollMs =
+  Number.isFinite(rawMinerPollMs) && rawMinerPollMs >= minMinerPollMs ? rawMinerPollMs : minMinerPollMs;
 const rawMinerPollConcurrency = Number(process.env.MINER_POLL_CONCURRENCY ?? 3);
 const minerPollConcurrency =
   Number.isFinite(rawMinerPollConcurrency) && rawMinerPollConcurrency >= 1 ? Math.floor(rawMinerPollConcurrency) : 3;

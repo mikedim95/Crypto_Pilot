@@ -135,7 +135,7 @@ export class MinerPollingService {
     private readonly repository: MinerRepository,
     private readonly readService: MinerReadService,
     private readonly commandService: MinerCommandService,
-    private readonly pollIntervalMs = 15_000,
+    private readonly pollIntervalMs = 60_000,
     private readonly pollConcurrency = 3,
     private readonly ingestPublisher: MinerIngestPublisher | null = null
   ) {}

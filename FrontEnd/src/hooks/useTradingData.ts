@@ -248,7 +248,7 @@ export function useFleetOverview() {
     queryKey: ["fleet-overview"],
     queryFn: backendApi.getFleetOverview,
     staleTime: 5_000,
-    refetchInterval: 15_000,
+    refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: 0,
   });
@@ -259,7 +259,7 @@ export function useFleetLive() {
     queryKey: ["fleet-live"],
     queryFn: backendApi.getFleetLive,
     staleTime: 5_000,
-    refetchInterval: 15_000,
+    refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: 0,
   });
@@ -300,7 +300,7 @@ export function useFleetHistory(scope: FleetHistoryScope = "hour") {
     queryKey: ["fleet-history", scope],
     queryFn: () => backendApi.getFleetHistory(scope),
     staleTime: 10_000,
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: 0,
   });
@@ -311,7 +311,7 @@ export function useMiners() {
     queryKey: ["miners-list"],
     queryFn: backendApi.getMiners,
     staleTime: 10_000,
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: 0,
   });
@@ -323,7 +323,7 @@ export function useMinerDetails(minerId: number | undefined) {
     queryFn: () => backendApi.getMinerDetails(minerId ?? 0),
     enabled: typeof minerId === "number" && minerId > 0,
     staleTime: 5_000,
-    refetchInterval: 15_000,
+    refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: 0,
   });
