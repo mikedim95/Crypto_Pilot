@@ -12,7 +12,7 @@ import { AddMinerDialog } from "@/components/miners/AddMinerDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
-import type { FleetHistoryScope, MinerEntity, MinerLiveData, MinerVerificationResult } from "@/types/api";
+import type { FleetHistoryScope, MinerEntity, MinerLiveData, MinerTimelineAlert, MinerVerificationResult } from "@/types/api";
 
 type MinerAction = "restart" | "reboot" | "start" | "stop" | "pause" | "resume";
 type BulkMinerAction = Extract<MinerAction, "restart" | "reboot" | "start" | "stop">;
@@ -20,7 +20,21 @@ type BulkMinerAction = Extract<MinerAction, "restart" | "reboot" | "start" | "st
 const EMPTY_MINERS: MinerEntity[] = [];
 const EMPTY_FLEET_LIVE: MinerLiveData[] = [];
 
-export function AsicMinersPage() {
+interface AsicMinersPageProps {
+  selectedAlert?: MinerTimelineAlert | null;
+}
+
+function scopeForTimestamp(timestamp: string): FleetHistoryScope {
+  const eventTime = new Date(timestamp).getTime();
+  if (!Number.isFinite(eventTime)) return "hour";
+  const ageMs = Date.now() - eventTime;
+  if (ageMs <= 60 * 60 * 1000) return "hour";
+  if (ageMs <= 24 * 60 * 60 * 1000) return "day";
+  if (ageMs <= 7 * 24 * 60 * 60 * 1000) return "week";
+  return "month";
+}
+
+export function AsicMinersPage({ selectedAlert = null }: AsicMinersPageProps) {
   const queryClient = useQueryClient();
   const [selectedMinerId, setSelectedMinerId] = useState<number | undefined>();
   const [selectedMinerIds, setSelectedMinerIds] = useState<number[]>([]);
@@ -217,6 +231,14 @@ export function AsicMinersPage() {
     }
   }, [miners, selectedMinerId]);
 
+  useEffect(() => {
+    if (!selectedAlert?.timestamp) return;
+    setHistoryScope(scopeForTimestamp(selectedAlert.timestamp));
+    window.setTimeout(() => {
+      document.getElementById("fleet-history-charts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }, [selectedAlert?.id, selectedAlert?.timestamp]);
+
   const handleToggleMiner = (minerId: number, checked: boolean) => {
     setSelectedMinerIds((current) => {
       if (checked) {
@@ -287,6 +309,7 @@ export function AsicMinersPage() {
         scope={historyScope}
         onScopeChange={setHistoryScope}
         isLoading={loadingHistory}
+        selectedAlert={selectedAlert}
       />
 
       <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">

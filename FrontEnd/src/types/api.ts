@@ -207,6 +207,22 @@ export interface MinerThermalPresetReportsResponse {
   generatedAt: string;
 }
 
+export type MinerTimelineAlertTone = "info" | "success" | "warning" | "critical";
+
+export interface MinerTimelineAlert {
+  id: string;
+  source: "thermal" | "offline" | "heat" | "hashrate" | "stale";
+  tone: MinerTimelineAlertTone;
+  emoji: string;
+  color: string;
+  title: string;
+  message: string;
+  timestamp: string;
+  minerId?: number;
+  minerName?: string;
+  minerIp?: string;
+}
+
 export interface MinerVerificationResult {
   reachable: boolean;
   httpOk: boolean;

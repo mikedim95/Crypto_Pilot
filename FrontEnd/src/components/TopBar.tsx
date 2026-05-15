@@ -2,11 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Bell, Plus, RotateCcw, X } from "lucide-react";
 import { backendApi } from "@/lib/api";
-import { useDashboardData, useDemoAccountSettings, useMinerThermalPresetReports } from "@/hooks/useTradingData";
+import { useDashboardData, useDemoAccountSettings, useFleetLive, useMinerThermalPresetReports, useMiners } from "@/hooks/useTradingData";
 import { SpinnerValue } from "@/components/SpinnerValue";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import type { AppSession, DemoAccountHolding, MinerThermalPresetReport, PortfolioAccountType } from "@/types/api";
+import type {
+  AppSession,
+  DemoAccountHolding,
+  MinerEntity,
+  MinerLiveData,
+  MinerThermalPresetReport,
+  MinerTimelineAlert,
+  MinerTimelineAlertTone,
+  PortfolioAccountType,
+} from "@/types/api";
 
 interface TopBarProps {
   accountType: PortfolioAccountType;
@@ -15,6 +24,7 @@ interface TopBarProps {
   onLogout: () => void;
   onProfileOpen: () => void;
   workspaceMode?: "full" | "asic-only";
+  onMinerAlertSelect?: (alert: MinerTimelineAlert) => void;
 }
 
 interface DemoAllocationDraftRow {
@@ -129,6 +139,132 @@ function isMissingThermalReportEndpoint(error: unknown): boolean {
   return error instanceof Error && /status 404/i.test(error.message);
 }
 
+function toTimelineTimestamp(value: string | null | undefined, fallback = new Date().toISOString()): string {
+  if (!value) return fallback;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(" ", "T")}Z` : value;
+  const parsed = new Date(normalized);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : fallback;
+}
+
+function hottestMinerTemp(miner: MinerLiveData): number | null {
+  const values = [...miner.boardTemps, ...miner.hotspotTemps].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 150
+  );
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function toneClasses(tone: MinerTimelineAlertTone): string {
+  const tones: Record<MinerTimelineAlertTone, string> = {
+    info: "border-sky-400/25 bg-sky-400/10 text-sky-200 hover:border-sky-300/45",
+    success: "border-primary/25 bg-primary/10 text-primary hover:border-primary/45",
+    warning: "border-amber-400/30 bg-amber-400/10 text-amber-200 hover:border-amber-300/50",
+    critical: "border-negative/35 bg-negative/10 text-negative hover:border-negative/60",
+  };
+  return tones[tone];
+}
+
+function buildThermalAlert(report: MinerThermalPresetReport): MinerTimelineAlert {
+  const tone: MinerTimelineAlertTone = report.status === "failed" ? "critical" : report.direction === "decrease" ? "warning" : "info";
+  const color = tone === "critical" ? "#ef4444" : tone === "warning" ? "#f59e0b" : "#38bdf8";
+  return {
+    id: `thermal-${report.id}`,
+    source: "thermal",
+    tone,
+    emoji: report.direction === "increase" ? "⚙️" : "🔥",
+    color,
+    title: `${report.minerName} preset changed`,
+    message: buildThermalReportMessage(report),
+    timestamp: toTimelineTimestamp(report.createdAt),
+    minerId: report.minerId,
+    minerName: report.minerName,
+    minerIp: report.minerIp,
+  };
+}
+
+function buildLiveFleetAlerts(fleet: MinerLiveData[], miners: MinerEntity[]): MinerTimelineAlert[] {
+  const minerSettings = new Map(miners.map((miner) => [miner.id, miner]));
+  const nowIso = new Date().toISOString();
+  const alerts: MinerTimelineAlert[] = [];
+
+  for (const live of fleet) {
+    const settings = minerSettings.get(live.minerId);
+    const timestamp = toTimelineTimestamp(live.lastSeenAt, nowIso);
+    const lastSeenMs = new Date(timestamp).getTime();
+    const staleMinutes = Number.isFinite(lastSeenMs) ? (Date.now() - lastSeenMs) / 60_000 : 0;
+    const hottestTemp = hottestMinerTemp(live);
+    const configuredMax = settings?.temperatureControlMax ?? null;
+    const heatLimit = typeof configuredMax === "number" ? configuredMax : 75;
+
+    if (!live.online) {
+      alerts.push({
+        id: `offline-${live.minerId}`,
+        source: "offline",
+        tone: "critical",
+        emoji: "🔴",
+        color: "#ef4444",
+        title: `${live.name} offline`,
+        message: `No live telemetry from ${live.ip}. Last seen ${formatThermalReportTime(timestamp)}.`,
+        timestamp,
+        minerId: live.minerId,
+        minerName: live.name,
+        minerIp: live.ip,
+      });
+      continue;
+    }
+
+    if (typeof hottestTemp === "number" && hottestTemp >= heatLimit) {
+      const critical = hottestTemp >= Math.max(heatLimit + 8, 85);
+      alerts.push({
+        id: `heat-${live.minerId}`,
+        source: "heat",
+        tone: critical ? "critical" : "warning",
+        emoji: critical ? "🚨" : "🔥",
+        color: critical ? "#ef4444" : "#f59e0b",
+        title: `${live.name} heat warning`,
+        message: `Hottest sensor is ${hottestTemp.toFixed(0)}C${configuredMax ? `, target max ${configuredMax}C` : ""}.`,
+        timestamp,
+        minerId: live.minerId,
+        minerName: live.name,
+        minerIp: live.ip,
+      });
+    }
+
+    if ((live.totalRateThs ?? 0) <= 1 && live.minerState?.toLowerCase() === "mining") {
+      alerts.push({
+        id: `hashrate-${live.minerId}`,
+        source: "hashrate",
+        tone: "critical",
+        emoji: "⚡",
+        color: "#ef4444",
+        title: `${live.name} no hash rate`,
+        message: `Miner is reporting mining state with ${(live.totalRateThs ?? 0).toFixed(2)} TH/s.`,
+        timestamp,
+        minerId: live.minerId,
+        minerName: live.name,
+        minerIp: live.ip,
+      });
+    }
+
+    if (staleMinutes >= 5) {
+      alerts.push({
+        id: `stale-${live.minerId}`,
+        source: "stale",
+        tone: "warning",
+        emoji: "⏱️",
+        color: "#f59e0b",
+        title: `${live.name} stale telemetry`,
+        message: `Last seen ${Math.round(staleMinutes)} minutes ago.`,
+        timestamp,
+        minerId: live.minerId,
+        minerName: live.name,
+        minerIp: live.ip,
+      });
+    }
+  }
+
+  return alerts;
+}
+
 export function TopBar({
   accountType,
   onAccountTypeChange,
@@ -136,6 +272,7 @@ export function TopBar({
   onLogout,
   onProfileOpen,
   workspaceMode = "full",
+  onMinerAlertSelect,
 }: TopBarProps) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
@@ -147,6 +284,8 @@ export function TopBar({
     isPending: loadingThermalReports,
     error: thermalReportsError,
   } = useMinerThermalPresetReports(30);
+  const { data: fleetLiveData } = useFleetLive(isAsicOnly);
+  const { data: minersData } = useMiners(isAsicOnly);
   const [isDemoSetupModalOpen, setIsDemoSetupModalOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [lastSeenThermalReportId, setLastSeenThermalReportId] = useState(readStoredThermalReportId);
@@ -313,8 +452,15 @@ export function TopBar({
   const changePct = data?.portfolioChange24h;
   const changeValue = data?.portfolioChange24hValue;
   const thermalReports = thermalReportsData?.reports ?? [];
+  const timelineAlerts = useMemo(
+    () =>
+      [...buildLiveFleetAlerts(fleetLiveData?.miners ?? [], minersData?.miners ?? []), ...thermalReports.map(buildThermalAlert)].sort(
+        (left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+      ),
+    [fleetLiveData?.miners, minersData?.miners, thermalReports]
+  );
   const latestThermalReportId = thermalReports[0]?.id ?? 0;
-  const hasUnreadThermalReports = latestThermalReportId > lastSeenThermalReportId;
+  const hasUnreadThermalReports = latestThermalReportId > lastSeenThermalReportId || timelineAlerts.some((alert) => alert.tone === "critical");
   const thermalEndpointMissing = isMissingThermalReportEndpoint(thermalReportsError);
 
   useEffect(() => {
@@ -338,7 +484,7 @@ export function TopBar({
   return (
     <>
       <header className={cn(
-        "page-enter flex items-center justify-between gap-3 border-b border-border bg-card/80 backdrop-blur-xl",
+        "page-enter relative z-50 flex items-center justify-between gap-3 border-b border-border bg-card/80 backdrop-blur-xl",
         isMobile ? "h-14 px-14 pr-4" : "h-14 px-5"
       )}>
         <div className="flex items-center gap-3 min-w-0">
@@ -461,50 +607,62 @@ export function TopBar({
               <Bell className="h-4 w-4" />
               {hasUnreadThermalReports ? (
                 <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary animate-pulse" />
-              ) : thermalReports.length > 0 ? (
+              ) : timelineAlerts.length > 0 ? (
                 <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-muted-foreground/50" />
               ) : null}
             </button>
 
             {isNotificationsOpen ? (
-              <div className="absolute right-0 top-12 z-50 w-[min(24rem,calc(100vw-1rem))] overflow-hidden rounded-md border border-border/90 bg-[#0d111d]/95 shadow-2xl backdrop-blur-xl">
+              <div className="fixed right-3 top-16 z-[1000] w-[min(28rem,calc(100vw-1rem))] overflow-hidden rounded-md border border-border/90 bg-[#0d111d]/98 shadow-[0_28px_90px_rgba(0,0,0,0.58)] backdrop-blur-xl md:right-5">
                 <div className="border-b border-border/80 px-4 py-3">
-                  <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Thermal Reports</div>
+                  <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Fleet Alerts</div>
                   <div className="mt-1 text-sm font-mono text-foreground">
-                    {thermalReports.length > 0 ? `${thermalReports.length} recent auto preset changes` : "No auto preset changes"}
+                    {timelineAlerts.length > 0 ? `${timelineAlerts.length} active and recent reports` : "No active alerts"}
                   </div>
                 </div>
 
                 <div className="max-h-[24rem] overflow-y-auto">
-                  {loadingThermalReports ? (
+                  {loadingThermalReports && timelineAlerts.length === 0 ? (
                     <div className="px-4 py-5 text-sm font-mono text-muted-foreground">Loading reports...</div>
-                  ) : thermalEndpointMissing ? (
+                  ) : thermalEndpointMissing && timelineAlerts.length === 0 ? (
                     <div className="px-4 py-5">
                       <div className="text-sm font-mono text-foreground">Thermal reports are waiting for the backend update.</div>
                       <div className="mt-2 text-xs leading-5 text-muted-foreground">
                         Auto preset changes will appear here after the Pi pulls the latest backend image.
                       </div>
                     </div>
-                  ) : thermalReportsError instanceof Error ? (
+                  ) : thermalReportsError instanceof Error && timelineAlerts.length === 0 ? (
                     <div className="px-4 py-5 text-sm font-mono text-muted-foreground">Thermal reports are unavailable.</div>
-                  ) : thermalReports.length === 0 ? (
-                    <div className="px-4 py-5 text-sm font-mono text-muted-foreground">No automatic thermal changes yet.</div>
+                  ) : timelineAlerts.length === 0 ? (
+                    <div className="px-4 py-5 text-sm font-mono text-muted-foreground">No active miner alerts or automatic thermal changes yet.</div>
                   ) : (
-                    thermalReports.map((report) => (
-                      <div key={report.id} className="border-b border-border/70 px-4 py-3 last:border-b-0">
+                    timelineAlerts.map((alert) => (
+                      <button
+                        type="button"
+                        key={alert.id}
+                        onClick={() => {
+                          onMinerAlertSelect?.(alert);
+                          setIsNotificationsOpen(false);
+                        }}
+                        className={cn(
+                          "w-full border-b px-4 py-3 text-left transition-colors last:border-b-0",
+                          toneClasses(alert.tone)
+                        )}
+                      >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-mono text-foreground">
-                              {report.minerName} <span className="text-muted-foreground">({report.minerIp})</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="shrink-0 text-base leading-none">{alert.emoji}</span>
+                              <span className="truncate text-sm font-mono text-foreground">{alert.title}</span>
                             </div>
-                            <div className="mt-1 text-xs leading-5 text-muted-foreground">{buildThermalReportMessage(report)}</div>
-                            {report.errorText ? <div className="mt-1 text-xs text-negative">{report.errorText}</div> : null}
+                            <div className="mt-1 text-xs leading-5 text-muted-foreground">{alert.message}</div>
+                            {alert.minerIp ? <div className="mt-1 text-[11px] font-mono text-muted-foreground/80">{alert.minerIp}</div> : null}
                           </div>
                           <div className="shrink-0 text-right text-[11px] font-mono text-muted-foreground">
-                            {formatThermalReportTime(report.createdAt)}
+                            {formatThermalReportTime(alert.timestamp)}
                           </div>
                         </div>
-                      </div>
+                      </button>
                     ))
                   )}
                 </div>

@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Flame, Loader2, TrendingUp } from "lucide-react";
-import { Brush, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Brush, CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { FleetHistoryScope, FleetHistorySeries } from "@/types/api";
+import type { FleetHistoryScope, FleetHistorySeries, MinerTimelineAlert } from "@/types/api";
 
 interface FleetHistoryChartsProps {
   history: FleetHistorySeries[];
   scope: FleetHistoryScope;
   onScopeChange: (scope: FleetHistoryScope) => void;
   isLoading?: boolean;
+  selectedAlert?: MinerTimelineAlert | null;
 }
 
 const SERIES_COLORS = [
@@ -136,6 +137,15 @@ function getDefaultBrushWindow(scope: FleetHistoryScope, rowCount: number) {
   return { startIndex, endIndex };
 }
 
+function getBrushWindowAroundIndex(scope: FleetHistoryScope, rowCount: number, index: number): BrushWindow {
+  if (rowCount <= 0) return { startIndex: 0, endIndex: 0 };
+  const defaultWindow = getDefaultBrushWindow(scope, rowCount);
+  const windowSize = Math.max(1, defaultWindow.endIndex - defaultWindow.startIndex + 1);
+  const halfWindow = Math.floor(windowSize / 2);
+  const startIndex = Math.max(0, Math.min(Math.max(0, rowCount - windowSize), index - halfWindow));
+  return { startIndex, endIndex: Math.min(rowCount - 1, startIndex + windowSize - 1) };
+}
+
 function clampBrushIndex(value: number, rowCount: number): number {
   if (!Number.isFinite(value)) return Math.max(0, rowCount - 1);
   return Math.max(0, Math.min(Math.max(0, rowCount - 1), Math.trunc(value)));
@@ -151,6 +161,30 @@ function normalizeBrushWindow(
   const safeEnd = Number.isFinite(next?.endIndex) ? clampBrushIndex(next?.endIndex as number, rowCount) : previous.endIndex;
   if (safeStart <= safeEnd) return { startIndex: safeStart, endIndex: safeEnd };
   return { startIndex: safeEnd, endIndex: safeStart };
+}
+
+function findNearestRowIndex(rows: Array<{ timestamp?: unknown }>, timestamp: string | undefined): number | null {
+  if (!timestamp || rows.length === 0) return null;
+  const targetTime = new Date(timestamp).getTime();
+  if (!Number.isFinite(targetTime)) return null;
+
+  let nearestIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  rows.forEach((row, index) => {
+    const rowTime = new Date(String(row.timestamp)).getTime();
+    if (!Number.isFinite(rowTime)) return;
+    const distance = Math.abs(rowTime - targetTime);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+
+  return nearestDistance === Number.POSITIVE_INFINITY ? null : nearestIndex;
+}
+
+function referenceLabel(alert: MinerTimelineAlert | null | undefined): string {
+  return alert ? `${alert.emoji} ${formatAxisTime(alert.timestamp, "hour")}` : "";
 }
 
 function getVisibleMetricValues(
@@ -268,11 +302,13 @@ function FleetRateChartCard({
   history,
   scope,
   brushWindow,
+  selectedAlert,
   isLoading = false,
 }: {
   history: FleetHistorySeries[];
   scope: FleetHistoryScope;
   brushWindow: BrushWindow;
+  selectedAlert?: MinerTimelineAlert | null;
   isLoading?: boolean;
 }) {
   const rows = useMemo(() => buildFleetRateRows(history), [history]);
@@ -283,6 +319,11 @@ function FleetRateChartCard({
   const visibleRows = useMemo(() => rows.slice(safeBrushWindow.startIndex, safeBrushWindow.endIndex + 1), [rows, safeBrushWindow]);
   const hasData = visibleRows.length > 0;
   const rateDomain = useMemo(() => getFleetRateDomain(visibleRows), [visibleRows]);
+  const highlightedIndex = useMemo(() => findNearestRowIndex(rows, selectedAlert?.timestamp), [rows, selectedAlert?.timestamp]);
+  const highlightedTimestamp =
+    highlightedIndex !== null && highlightedIndex >= safeBrushWindow.startIndex && highlightedIndex <= safeBrushWindow.endIndex
+      ? rows[highlightedIndex]?.timestamp
+      : null;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">
@@ -317,6 +358,15 @@ function FleetRateChartCard({
               domain={rateDomain}
             />
             <Tooltip content={<FleetRateTooltip />} wrapperStyle={{ outline: "none" }} />
+            {highlightedTimestamp ? (
+              <ReferenceLine
+                x={highlightedTimestamp}
+                stroke={selectedAlert?.color ?? "#00f5d4"}
+                strokeDasharray="4 4"
+                strokeWidth={2}
+                label={{ value: referenceLabel(selectedAlert), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: 11 }}
+              />
+            ) : null}
             <Line
               type="monotone"
               dataKey="totalRateThs"
@@ -355,12 +405,14 @@ function ChartCard({
   unit,
   brushWindow,
   onBrushChange,
+  selectedAlert,
   showBrush = false,
   isLoading = false,
 }: {
   title: string; subtitle: string; icon: typeof Activity; history: FleetHistorySeries[];
   metric: ChartMetricKey; scope: FleetHistoryScope; unit: string; brushWindow: BrushWindow;
   onBrushChange: (next: { startIndex?: number; endIndex?: number } | undefined, rowCount: number) => void;
+  selectedAlert?: MinerTimelineAlert | null;
   showBrush?: boolean; isLoading?: boolean;
 }) {
   const seriesMeta = useMemo(() => getSeriesMeta(history, metric), [history, metric]);
@@ -378,6 +430,11 @@ function ChartCard({
   );
   const hashrateDomain = useMemo(() => getHashrateDomain(visibleHashrateValues), [visibleHashrateValues]);
   const hashrateTicks = useMemo(() => getHashrateTicks(hashrateDomain), [hashrateDomain]);
+  const highlightedIndex = useMemo(() => findNearestRowIndex(rows, selectedAlert?.timestamp), [rows, selectedAlert?.timestamp]);
+  const highlightedTimestamp =
+    highlightedIndex !== null && highlightedIndex >= safeBrushWindow.startIndex && highlightedIndex <= safeBrushWindow.endIndex
+      ? rows[highlightedIndex]?.timestamp
+      : null;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">
@@ -417,6 +474,15 @@ function ChartCard({
               wrapperStyle={{ outline: "none" }}
             />
             <Legend wrapperStyle={{ fontFamily: "IBM Plex Mono", fontSize: "11px", paddingTop: "14px" }} />
+            {highlightedTimestamp ? (
+              <ReferenceLine
+                x={highlightedTimestamp}
+                stroke={selectedAlert?.color ?? "#00f5d4"}
+                strokeDasharray="4 4"
+                strokeWidth={2}
+                label={{ value: referenceLabel(selectedAlert), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: 11 }}
+              />
+            ) : null}
             {seriesMeta.map((series, idx) => (
               <Line
                 key={series.key}
@@ -463,26 +529,39 @@ function ChartCard({
   );
 }
 
-export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = false }: FleetHistoryChartsProps) {
+export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = false, selectedAlert = null }: FleetHistoryChartsProps) {
   const rowCount = useMemo(() => getHistoryTimestampCount(history), [history]);
+  const fleetRateRows = useMemo(() => buildFleetRateRows(history), [history]);
   const [brushWindow, setBrushWindow] = useState<BrushWindow>(() => getDefaultBrushWindow(scope, rowCount));
 
   useEffect(() => {
     setBrushWindow(getDefaultBrushWindow(scope, rowCount));
   }, [scope, rowCount]);
 
+  useEffect(() => {
+    const selectedIndex = findNearestRowIndex(fleetRateRows, selectedAlert?.timestamp);
+    if (selectedIndex === null) return;
+    setBrushWindow(getBrushWindowAroundIndex(scope, fleetRateRows.length, selectedIndex));
+  }, [fleetRateRows, scope, selectedAlert?.id, selectedAlert?.timestamp]);
+
   const handleBrushChange = (next: { startIndex?: number; endIndex?: number } | undefined, chartRowCount: number) => {
     setBrushWindow((previous) => normalizeBrushWindow(next, previous, chartRowCount));
   };
 
   return (
-    <div className="space-y-4">
+    <div id="fleet-history-charts" className="space-y-4 scroll-mt-20">
       <div className="flex flex-col md:flex-row flex-wrap items-start md:items-center justify-between gap-3 rounded-lg border border-border bg-card p-4">
         <div>
           <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">History Scope</div>
           <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">
             Hashrate is plotted on a logarithmic scale in TH/s. The shared slider controls both history charts.
           </div>
+          {selectedAlert ? (
+            <div className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-xs font-mono" style={{ borderColor: selectedAlert.color, color: selectedAlert.color }}>
+              <span>{selectedAlert.emoji}</span>
+              <span className="truncate">{selectedAlert.title} at {formatTooltipTime(selectedAlert.timestamp)}</span>
+            </div>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
           {SCOPE_OPTIONS.map((option) => (
@@ -501,7 +580,7 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
       </div>
 
       <div className="grid grid-cols-1 gap-5">
-        <FleetRateChartCard history={history} scope={scope} brushWindow={brushWindow} isLoading={isLoading} />
+        <FleetRateChartCard history={history} scope={scope} brushWindow={brushWindow} selectedAlert={selectedAlert} isLoading={isLoading} />
         <ChartCard
           title="Fleet Hashrate History"
           subtitle="Per-miner hashrate in TH/s from persisted backend snapshots."
@@ -512,6 +591,7 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
           unit="TH/s"
           brushWindow={brushWindow}
           onBrushChange={handleBrushChange}
+          selectedAlert={selectedAlert}
           isLoading={isLoading}
         />
         <ChartCard
@@ -524,6 +604,7 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
           unit="C"
           brushWindow={brushWindow}
           onBrushChange={handleBrushChange}
+          selectedAlert={selectedAlert}
           showBrush={true}
           isLoading={isLoading}
         />

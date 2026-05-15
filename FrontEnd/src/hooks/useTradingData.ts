@@ -256,10 +256,11 @@ export function useFleetOverview() {
   });
 }
 
-export function useFleetLive() {
+export function useFleetLive(enabled = true) {
   return useQuery({
     queryKey: ["fleet-live"],
     queryFn: backendApi.getFleetLive,
+    enabled,
     staleTime: 5_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
@@ -308,10 +309,11 @@ export function useFleetHistory(scope: FleetHistoryScope = "hour") {
   });
 }
 
-export function useMiners() {
+export function useMiners(enabled = true) {
   return useQuery({
     queryKey: ["miners-list"],
     queryFn: backendApi.getMiners,
+    enabled,
     staleTime: 10_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
