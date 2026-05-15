@@ -14,6 +14,7 @@ interface TopBarProps {
   session: AppSession;
   onLogout: () => void;
   onProfileOpen: () => void;
+  workspaceMode?: "full" | "asic-only";
 }
 
 interface DemoAllocationDraftRow {
@@ -124,11 +125,23 @@ function buildThermalReportMessage(report: MinerThermalPresetReport): string {
   return `${action}: ${presetChange}${temperature}.`;
 }
 
-export function TopBar({ accountType, onAccountTypeChange, session, onLogout, onProfileOpen }: TopBarProps) {
+function isMissingThermalReportEndpoint(error: unknown): boolean {
+  return error instanceof Error && /status 404/i.test(error.message);
+}
+
+export function TopBar({
+  accountType,
+  onAccountTypeChange,
+  session,
+  onLogout,
+  onProfileOpen,
+  workspaceMode = "full",
+}: TopBarProps) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
-  const { data, isPending } = useDashboardData(accountType);
-  const { data: demoAccountData, isPending: loadingDemoAccount } = useDemoAccountSettings();
+  const isAsicOnly = workspaceMode === "asic-only";
+  const { data, isPending } = useDashboardData(accountType, !isAsicOnly);
+  const { data: demoAccountData, isPending: loadingDemoAccount } = useDemoAccountSettings(!isAsicOnly);
   const {
     data: thermalReportsData,
     isPending: loadingThermalReports,
@@ -175,6 +188,10 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
   };
 
   useEffect(() => {
+    if (isAsicOnly) {
+      return;
+    }
+
     if (!isDemoMode) {
       setHasDismissedEmptyDemoPrompt(false);
       return;
@@ -190,6 +207,7 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
     hasDismissedEmptyDemoPrompt,
     isDemoMode,
     isDemoSetupModalOpen,
+    isAsicOnly,
     loadingDemoAccount,
   ]);
 
@@ -297,6 +315,7 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
   const thermalReports = thermalReportsData?.reports ?? [];
   const latestThermalReportId = thermalReports[0]?.id ?? 0;
   const hasUnreadThermalReports = latestThermalReportId > lastSeenThermalReportId;
+  const thermalEndpointMissing = isMissingThermalReportEndpoint(thermalReportsError);
 
   useEffect(() => {
     if (!isNotificationsOpen) return;
@@ -322,76 +341,91 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
         "page-enter flex items-center justify-between gap-3 border-b border-border bg-card/80 backdrop-blur-xl",
         isMobile ? "h-14 px-14 pr-4" : "h-14 px-5"
       )}>
-        {/* Left: Mode toggle */}
         <div className="flex items-center gap-3 min-w-0">
-          <div className="relative inline-flex items-center rounded-full border border-border bg-background/60 p-0.5 shrink-0">
-            <span
-              className={cn(
-                "pointer-events-none absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-0.125rem)] rounded-full transition-all duration-500 ease-out",
-                accountType === "demo"
-                  ? "translate-x-0 bg-primary/20 shadow-[0_0_12px_hsl(var(--primary)/0.3)] ring-1 ring-primary/40"
-                  : "translate-x-full bg-[hsl(30,100%,60%)]/20 shadow-[0_0_12px_hsl(30,100%,60%,0.3)] ring-1 ring-[hsl(30,100%,60%)]/40"
-              )}
-            />
-            <button
-              onClick={() => onAccountTypeChange("demo")}
-              className={cn(
-                "relative z-10 rounded-full px-3 py-1.5 text-xs font-mono uppercase tracking-widest transition-colors duration-300",
-                isMobile ? "w-16" : "w-20",
-                accountType === "demo" ? "text-primary font-semibold" : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              Demo
-            </button>
-            <button
-              type="button"
-              disabled
-              className={cn(
-                "relative z-10 rounded-full px-3 py-1.5 text-xs font-mono uppercase tracking-widest transition-colors duration-300",
-                isMobile ? "w-16" : "w-20",
-                "cursor-not-allowed text-muted-foreground/60"
-              )}
-              title="Live exchange account mode is unavailable."
-            >
-              Live
-            </button>
-          </div>
-
-          {/* Account status - hidden on very small screens */}
-          {!isMobile && (
+          {isAsicOnly ? (
             <div className="flex items-center gap-3 min-w-0">
-              <span className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-mono uppercase tracking-[0.2em] shrink-0",
-                activeBadgeTone
-              )}>
-                <span className={cn(
-                  "h-1.5 w-1.5 rounded-full shrink-0",
-                  isDemoMode
-                    ? demoInitialized ? "bg-primary animate-pulse" : "bg-amber-400 animate-pulse"
-                    : connectionConnected ? "bg-primary animate-pulse" : "bg-muted-foreground"
-                )} />
-                {activeBadgeLabel}
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-[0.2em] text-primary">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                ASIC Fleet
               </span>
-
-              <div className="flex items-baseline gap-2 min-w-0">
-                <SpinnerValue
-                  loading={isLoading && !isDemoMode}
-                  value={activeAccountValue}
-                  className="text-sm font-mono font-semibold text-foreground truncate"
-                />
-                {(isDemoMode ? demoInitialized : connectionConnected) && changePct !== undefined && changeValue !== undefined ? (
-                  <span className={cn("text-xs font-mono shrink-0", changePct < 0 ? "text-negative" : "text-positive")}>
-                    {changePct >= 0 ? "+" : ""}{changePct}%
-                  </span>
-                ) : null}
-              </div>
+              {!isMobile ? (
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-mono font-semibold text-foreground">Miner Control</div>
+                  <div className="text-[11px] font-mono text-muted-foreground">Telemetry, thermal control, and fleet commands</div>
+                </div>
+              ) : null}
             </div>
+          ) : (
+            <>
+              <div className="relative inline-flex items-center rounded-full border border-border bg-background/60 p-0.5 shrink-0">
+                <span
+                  className={cn(
+                    "pointer-events-none absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-0.125rem)] rounded-full transition-all duration-500 ease-out",
+                    accountType === "demo"
+                      ? "translate-x-0 bg-primary/20 shadow-[0_0_12px_hsl(var(--primary)/0.3)] ring-1 ring-primary/40"
+                      : "translate-x-full bg-[hsl(30,100%,60%)]/20 shadow-[0_0_12px_hsl(30,100%,60%,0.3)] ring-1 ring-[hsl(30,100%,60%)]/40"
+                  )}
+                />
+                <button
+                  onClick={() => onAccountTypeChange("demo")}
+                  className={cn(
+                    "relative z-10 rounded-full px-3 py-1.5 text-xs font-mono uppercase tracking-widest transition-colors duration-300",
+                    isMobile ? "w-16" : "w-20",
+                    accountType === "demo" ? "text-primary font-semibold" : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  Demo
+                </button>
+                <button
+                  type="button"
+                  disabled
+                  className={cn(
+                    "relative z-10 rounded-full px-3 py-1.5 text-xs font-mono uppercase tracking-widest transition-colors duration-300",
+                    isMobile ? "w-16" : "w-20",
+                    "cursor-not-allowed text-muted-foreground/60"
+                  )}
+                  title="Live exchange account mode is unavailable."
+                >
+                  Live
+                </button>
+              </div>
+
+              {!isMobile && (
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-mono uppercase tracking-[0.2em] shrink-0",
+                    activeBadgeTone
+                  )}>
+                    <span className={cn(
+                      "h-1.5 w-1.5 rounded-full shrink-0",
+                      isDemoMode
+                        ? demoInitialized ? "bg-primary animate-pulse" : "bg-amber-400 animate-pulse"
+                        : connectionConnected ? "bg-primary animate-pulse" : "bg-muted-foreground"
+                    )} />
+                    {activeBadgeLabel}
+                  </span>
+
+                  <div className="flex items-baseline gap-2 min-w-0">
+                    <SpinnerValue
+                      loading={isLoading && !isDemoMode}
+                      value={activeAccountValue}
+                      className="text-sm font-mono font-semibold text-foreground truncate"
+                    />
+                    {(isDemoMode ? demoInitialized : connectionConnected) && changePct !== undefined && changeValue !== undefined ? (
+                      <span className={cn("text-xs font-mono shrink-0", changePct < 0 ? "text-negative" : "text-positive")}>
+                        {changePct >= 0 ? "+" : ""}{changePct}%
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Right side */}
         <div className="flex shrink-0 items-center gap-2">
-          {isDemoMode ? (
+          {isDemoMode && !isAsicOnly ? (
             <button
               onClick={() => {
                 setSetupErrorMessage("");
@@ -433,8 +467,8 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
             </button>
 
             {isNotificationsOpen ? (
-              <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-1rem))] overflow-hidden rounded-lg border border-border bg-card shadow-2xl">
-                <div className="border-b border-border px-4 py-3">
+              <div className="absolute right-0 top-12 z-50 w-[min(24rem,calc(100vw-1rem))] overflow-hidden rounded-md border border-border/90 bg-[#0d111d]/95 shadow-2xl backdrop-blur-xl">
+                <div className="border-b border-border/80 px-4 py-3">
                   <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Thermal Reports</div>
                   <div className="mt-1 text-sm font-mono text-foreground">
                     {thermalReports.length > 0 ? `${thermalReports.length} recent auto preset changes` : "No auto preset changes"}
@@ -444,8 +478,15 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
                 <div className="max-h-[24rem] overflow-y-auto">
                   {loadingThermalReports ? (
                     <div className="px-4 py-5 text-sm font-mono text-muted-foreground">Loading reports...</div>
+                  ) : thermalEndpointMissing ? (
+                    <div className="px-4 py-5">
+                      <div className="text-sm font-mono text-foreground">Thermal reports are waiting for the backend update.</div>
+                      <div className="mt-2 text-xs leading-5 text-muted-foreground">
+                        Auto preset changes will appear here after the Pi pulls the latest backend image.
+                      </div>
+                    </div>
                   ) : thermalReportsError instanceof Error ? (
-                    <div className="px-4 py-5 text-sm font-mono text-negative">{thermalReportsError.message}</div>
+                    <div className="px-4 py-5 text-sm font-mono text-muted-foreground">Thermal reports are unavailable.</div>
                   ) : thermalReports.length === 0 ? (
                     <div className="px-4 py-5 text-sm font-mono text-muted-foreground">No automatic thermal changes yet.</div>
                   ) : (

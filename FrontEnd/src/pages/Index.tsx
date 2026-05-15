@@ -37,6 +37,7 @@ const Index = ({ session, onLogout }: IndexProps) => {
           session={session}
           onLogout={onLogout}
           onProfileOpen={() => setProfileOpen(true)}
+          workspaceMode="asic-only"
         />
         <main className="flex-1 overflow-y-auto">
           <div key={currentPage} className="page-enter">

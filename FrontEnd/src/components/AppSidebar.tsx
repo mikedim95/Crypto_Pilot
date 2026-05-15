@@ -1,22 +1,11 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
-  Briefcase,
-  BarChart3,
-  Bot,
-  ClipboardList,
   ChevronLeft,
   ChevronRight,
-  Lock,
   HardDrive,
-  Cpu,
   Menu,
   X,
-  LayoutDashboard,
-  BrainCircuit,
-  ArrowLeftRight,
-  PlaySquare,
-  Wallet,
 } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -25,22 +14,7 @@ interface SidebarProps {
   onNavigate: (page: string) => void;
 }
 
-const navItems = [
-  { id: "asic-miners", label: "ASIC Miners", icon: HardDrive, locked: false },
-  { id: "portfolio", label: "Portfolio", icon: Briefcase, locked: true },
-  { id: "wallet", label: "Wallet", icon: Wallet, locked: true },
-  { id: "exchange-intelligence", label: "Exchanges", icon: ArrowLeftRight, locked: true },
-  { id: "execution-simulator", label: "Execution Sim", icon: PlaySquare, locked: true },
-  { id: "strategies", label: "Strategies", icon: Bot, locked: true },
-  { id: "intelligence", label: "Intelligence", icon: BrainCircuit, locked: true },
-  { id: "nicehash", label: "NiceHash", icon: Cpu, locked: true },
-];
-
-const comingSoon = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "markets", label: "Markets", icon: BarChart3 },
-  { id: "orders", label: "Orders", icon: ClipboardList },
-];
+const navItems = [{ id: "asic-miners", label: "ASIC Miners", icon: HardDrive }];
 
 export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -58,10 +32,10 @@ export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
       <div className="h-14 flex items-center px-4 border-b border-border shrink-0">
         {!collapsed && (
           <span className="font-mono text-base font-semibold tracking-widest text-foreground">
-            NEXUS<span className="text-primary transition-colors duration-500">.</span>
+            ASIC<span className="text-primary transition-colors duration-500">.</span>
           </span>
         )}
-        {collapsed && !isMobile && <span className="font-mono text-base font-bold text-primary mx-auto transition-colors duration-500">N</span>}
+        {collapsed && !isMobile && <HardDrive className="mx-auto h-5 w-5 text-primary transition-colors duration-500" />}
         {isMobile && (
           <button onClick={() => setMobileOpen(false)} className="ml-auto p-1 text-muted-foreground hover:text-foreground">
             <X className="h-5 w-5" />
@@ -81,60 +55,23 @@ export function AppSidebar({ currentPage, onNavigate }: SidebarProps) {
 
         {navItems.map((item) => {
           const active = currentPage === item.id;
-          const locked = item.locked;
           return (
             <button
               key={item.id}
               onClick={() => handleNavigate(item.id)}
-              disabled={locked}
-              title={locked ? "Locked while ASIC Miners is the active workspace." : undefined}
               className={cn(
                 "w-full flex items-center gap-3 rounded-md text-sm transition-all duration-300 ease-out transform-gpu",
                 collapsed && !isMobile ? "justify-center px-2 py-3" : "px-3 py-3",
-                locked
-                  ? "cursor-not-allowed opacity-40 text-muted-foreground"
-                  : active
+                active
                   ? "bg-secondary text-foreground shadow-[0_0_0_1px_hsl(var(--primary)/0.25)]"
                   : "text-muted-foreground hover:text-foreground hover:bg-secondary/50 hover:translate-x-1"
               )}
             >
               <item.icon className="h-[18px] w-[18px] shrink-0" />
-              {(isMobile || !collapsed) && (
-                <>
-                  <span className="font-mono text-sm">{item.label}</span>
-                  {locked ? <Lock className="h-3.5 w-3.5 ml-auto text-muted-foreground" /> : null}
-                </>
-              )}
+              {(isMobile || !collapsed) && <span className="font-mono text-sm">{item.label}</span>}
             </button>
           );
         })}
-
-        <div
-          className={cn(
-            "text-[11px] font-mono uppercase tracking-wider text-muted-foreground mt-6 mb-2",
-            collapsed && !isMobile ? "text-center" : "px-3"
-          )}
-        >
-          {collapsed && !isMobile ? "--" : "Coming Soon"}
-        </div>
-
-        {comingSoon.map((item) => (
-          <div
-            key={item.id}
-            className={cn(
-              "w-full flex items-center gap-3 rounded-md text-sm opacity-40 cursor-not-allowed",
-              collapsed && !isMobile ? "justify-center px-2 py-3" : "px-3 py-3"
-            )}
-          >
-            <item.icon className="h-[18px] w-[18px] shrink-0 text-muted-foreground" />
-            {(isMobile || !collapsed) && (
-              <>
-                <span className="font-mono text-sm text-muted-foreground">{item.label}</span>
-                <Lock className="h-3.5 w-3.5 ml-auto text-muted-foreground" />
-              </>
-            )}
-          </div>
-        ))}
       </nav>
 
       {!isMobile && (

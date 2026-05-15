@@ -8,10 +8,11 @@ import type {
   PortfolioAccountType,
 } from "@/types/api";
 
-export function useDashboardData(accountType: PortfolioAccountType = "real") {
+export function useDashboardData(accountType: PortfolioAccountType = "real", enabled = true) {
   return useQuery({
     queryKey: ["dashboard", accountType],
     queryFn: () => backendApi.getDashboard(accountType),
+    enabled,
     staleTime: 10_000,
     refetchInterval: 15_000,
     retry: 1,
@@ -150,10 +151,11 @@ export function useCryptoComConnection(enabled = true) {
   });
 }
 
-export function useDemoAccountSettings() {
+export function useDemoAccountSettings(enabled = true) {
   return useQuery({
     queryKey: ["demo-account-settings"],
     queryFn: backendApi.getDemoAccountSettings,
+    enabled,
     staleTime: 5_000,
     refetchInterval: 20_000,
     retry: 1,
