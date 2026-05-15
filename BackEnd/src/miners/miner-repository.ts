@@ -21,7 +21,6 @@ import {
 } from "./types.js";
 import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord, toMysqlDateTime } from "./miner-utils.js";
 
-const DEFAULT_HISTORY_MAX_ROWS_PER_MINER = 500;
 const DEFAULT_SNAPSHOT_PRUNE_BATCH_SIZE = 100;
 
 function extractErrorCode(error: unknown): string | null {
@@ -320,6 +319,8 @@ export class MinerRepository {
         ]
       );
 
+      await this.upsertHourlyRollup(conn, input);
+
       const insertId = Number((result as { insertId?: number }).insertId ?? 0);
       const snapshot = await this.getSnapshotById(insertId);
       if (!snapshot) {
@@ -327,6 +328,60 @@ export class MinerRepository {
       }
       return snapshot;
     });
+  }
+
+  private async upsertHourlyRollup(conn: PoolConnection, input: MinerSnapshotPersistInput): Promise<void> {
+    const totalRate = typeof input.totalRateThs === "number" && Number.isFinite(input.totalRateThs) ? input.totalRateThs : null;
+    const powerWatts = typeof input.powerWatts === "number" && Number.isFinite(input.powerWatts) && input.powerWatts > 0 ? input.powerWatts : null;
+    const maxBoardTemp = maxNullable(input.boardTemps.map(validTemperature));
+    const maxHotspotTemp = maxNullable(input.hotspotTemps.map(validTemperature));
+
+    await conn.query(
+      `
+        INSERT INTO miner_status_hourly_rollups (
+          miner_id,
+          bucket_start,
+          online,
+          total_rate_sum,
+          total_rate_count,
+          power_sum,
+          power_count,
+          max_board_temp,
+          max_hotspot_temp,
+          sample_count
+        ) VALUES (
+          ?,
+          FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(CURRENT_TIMESTAMP) / 3600) * 3600),
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          1
+        )
+        ON DUPLICATE KEY UPDATE
+          online = GREATEST(online, VALUES(online)),
+          total_rate_sum = total_rate_sum + VALUES(total_rate_sum),
+          total_rate_count = total_rate_count + VALUES(total_rate_count),
+          power_sum = power_sum + VALUES(power_sum),
+          power_count = power_count + VALUES(power_count),
+          max_board_temp = NULLIF(GREATEST(COALESCE(max_board_temp, -1), COALESCE(VALUES(max_board_temp), -1)), -1),
+          max_hotspot_temp = NULLIF(GREATEST(COALESCE(max_hotspot_temp, -1), COALESCE(VALUES(max_hotspot_temp), -1)), -1),
+          sample_count = sample_count + 1
+      `,
+      [
+        input.minerId,
+        input.online,
+        totalRate ?? 0,
+        totalRate === null ? 0 : 1,
+        powerWatts ?? 0,
+        powerWatts === null ? 0 : 1,
+        maxBoardTemp,
+        maxHotspotTemp,
+      ]
+    );
   }
 
   async getSnapshotById(snapshotId: number): Promise<MinerSnapshotEntity | null> {
@@ -417,24 +472,28 @@ export class MinerRepository {
       Number.isInteger(batchSize) && batchSize > 0
         ? Math.min(batchSize, 10_000)
         : DEFAULT_SNAPSHOT_PRUNE_BATCH_SIZE;
-    const miners = await this.listMiners();
-    let deleted = 0;
+    const [result] = await pool.query(
+      `
+        DELETE FROM miner_status_snapshots
+        WHERE created_at < ?
+        ORDER BY created_at ASC
+        LIMIT ?
+      `,
+      [toMysqlDateTime(cutoffIso), safeBatchSize]
+    );
+    return Number((result as { affectedRows?: number }).affectedRows ?? 0);
+  }
 
-    for (const miner of miners) {
-      const [result] = await pool.query(
-        `
-          DELETE FROM miner_status_snapshots
-          WHERE miner_id = ?
-            AND created_at < ?
-          ORDER BY created_at ASC
-          LIMIT ?
-        `,
-        [miner.id, toMysqlDateTime(cutoffIso), safeBatchSize]
-      );
-      deleted += Number((result as { affectedRows?: number }).affectedRows ?? 0);
-    }
-
-    return deleted;
+  async pruneHourlyRollupsBefore(cutoffIso: string): Promise<number> {
+    await this.init();
+    const [result] = await pool.query(
+      `
+        DELETE FROM miner_status_hourly_rollups
+        WHERE bucket_start < ?
+      `,
+      [toMysqlDateTime(cutoffIso)]
+    );
+    return Number((result as { affectedRows?: number }).affectedRows ?? 0);
   }
 
   async listHistoryBucketsSince(minerId: number, sinceIso: string, bucketSeconds: number): Promise<FleetHistoryPoint[]> {
@@ -499,50 +558,57 @@ export class MinerRepository {
       return pointsByMinerId;
     }
 
-    const safeBucketSeconds = Number.isInteger(bucketSeconds) && bucketSeconds > 0 ? bucketSeconds : 60;
-    const maxRowsPerMiner = (() => {
-      const parsed = Number(process.env.MINER_HISTORY_MAX_ROWS_PER_MINER ?? DEFAULT_HISTORY_MAX_ROWS_PER_MINER);
-      return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 20_000) : DEFAULT_HISTORY_MAX_ROWS_PER_MINER;
-    })();
+    if (bucketSeconds >= 3600) {
+      return this.listHourlyRollupBucketsForMinerIdsSince(safeMinerIds, sinceIso, bucketSeconds);
+    }
 
     await Promise.all(
       safeMinerIds.map(async (minerId) => {
-        const [rows] = await pool.query<MinerSnapshotRecord[]>(
-          `
-            SELECT
-              id,
-              miner_id,
-              online,
-              miner_state,
-              preset_name,
-              preset_pretty,
-              preset_status,
-              total_rate_ths,
-              board_temp_1,
-              board_temp_2,
-              board_temp_3,
-              hotspot_temp_1,
-              hotspot_temp_2,
-              hotspot_temp_3,
-              fan_pwm,
-              fan_rpm_1,
-              fan_rpm_2,
-              fan_rpm_3,
-              fan_rpm_4,
-              power_watts,
-              NULL AS raw_json,
-              created_at
-            FROM miner_status_snapshots FORCE INDEX (idx_miner_status_snapshots_miner_created)
-            WHERE miner_id = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-          `,
-          [minerId, maxRowsPerMiner]
-        );
-
-        pointsByMinerId.set(minerId, this.mapSnapshotRowsToFleetHistoryPoints(rows, safeBucketSeconds, sinceIso));
+        pointsByMinerId.set(minerId, await this.listHistoryBucketsSince(minerId, sinceIso, bucketSeconds));
       })
     );
+
+    return pointsByMinerId;
+  }
+
+  private async listHourlyRollupBucketsForMinerIdsSince(
+    minerIds: number[],
+    sinceIso: string,
+    bucketSeconds: number
+  ): Promise<Map<number, FleetHistoryPoint[]>> {
+    const pointsByMinerId = new Map<number, FleetHistoryPoint[]>();
+    for (const minerId of minerIds) {
+      pointsByMinerId.set(minerId, []);
+    }
+
+    const safeBucketSeconds = Number.isInteger(bucketSeconds) && bucketSeconds > 0 ? bucketSeconds : 3600;
+    const [rows] = await pool.query<FleetHistoryBucketByMinerRecord[]>(
+      `
+        SELECT
+          miner_id,
+          FLOOR(UNIX_TIMESTAMP(bucket_start) / ?) AS bucket_index,
+          MAX(CASE WHEN online = 1 THEN 1 ELSE 0 END) AS online,
+          SUM(total_rate_sum) / NULLIF(SUM(total_rate_count), 0) AS avg_total_rate_ths,
+          SUM(power_sum) / NULLIF(SUM(power_count), 0) AS avg_power_watts,
+          NULLIF(MAX(COALESCE(max_board_temp, -1)), -1) AS max_board_temp,
+          NULLIF(MAX(COALESCE(max_hotspot_temp, -1)), -1) AS max_hotspot_temp
+        FROM miner_status_hourly_rollups
+        WHERE miner_id IN (?)
+          AND bucket_start >= ?
+        GROUP BY miner_id, bucket_index
+        ORDER BY miner_id ASC, bucket_index ASC
+      `,
+      [safeBucketSeconds, minerIds, toMysqlDateTime(sinceIso)]
+    );
+
+    for (const row of rows) {
+      const point = this.mapFleetHistoryBucket(row, safeBucketSeconds);
+      if (point) {
+        const existing = pointsByMinerId.get(Number(row.miner_id)) ?? [];
+        existing.push(point);
+        pointsByMinerId.set(Number(row.miner_id), existing);
+      }
+    }
 
     return pointsByMinerId;
   }

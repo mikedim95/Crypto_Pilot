@@ -47,7 +47,28 @@ export const minerSchemaStatements = [
       raw_json JSON NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_miner_status_snapshots_miner_created (miner_id, created_at),
+      INDEX idx_miner_status_snapshots_created (created_at),
       CONSTRAINT fk_miner_status_snapshots_miner
+        FOREIGN KEY (miner_id) REFERENCES miners(id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS miner_status_hourly_rollups (
+      miner_id BIGINT UNSIGNED NOT NULL,
+      bucket_start DATETIME NOT NULL,
+      online BOOLEAN NOT NULL DEFAULT FALSE,
+      total_rate_sum DECIMAL(20, 6) NOT NULL DEFAULT 0,
+      total_rate_count INT UNSIGNED NOT NULL DEFAULT 0,
+      power_sum BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      power_count INT UNSIGNED NOT NULL DEFAULT 0,
+      max_board_temp INT NULL,
+      max_hotspot_temp INT NULL,
+      sample_count INT UNSIGNED NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (miner_id, bucket_start),
+      INDEX idx_miner_status_hourly_rollups_bucket (bucket_start),
+      CONSTRAINT fk_miner_status_hourly_rollups_miner
         FOREIGN KEY (miner_id) REFERENCES miners(id)
         ON DELETE CASCADE
     ) ENGINE=InnoDB
@@ -91,4 +112,5 @@ export const minerColumnBackfillStatements = [
   `ALTER TABLE miners ADD COLUMN temp_control_min INT NULL`,
   `ALTER TABLE miners ADD COLUMN temp_control_max INT NULL`,
   `ALTER TABLE miners ADD COLUMN temp_control_last_adjusted_at DATETIME NULL`,
+  `ALTER TABLE miner_status_snapshots ADD INDEX idx_miner_status_snapshots_created (created_at)`,
 ] as const;

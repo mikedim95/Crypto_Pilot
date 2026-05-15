@@ -22,9 +22,9 @@ const MINER_READ_TIMEOUT_MS = (() => {
 })();
 
 const SNAPSHOT_RETENTION_DAYS = (() => {
-  const parsed = Number(process.env.MINER_SNAPSHOT_RETENTION_DAYS ?? 7);
+  const parsed = Number(process.env.MINER_SNAPSHOT_RETENTION_DAYS ?? 30);
   if (!Number.isFinite(parsed) || parsed < 1) {
-    return 7;
+    return 30;
   }
   return Math.round(parsed);
 })();
@@ -38,17 +38,17 @@ const SNAPSHOT_RETENTION_INTERVAL_MS = (() => {
 })();
 
 const SNAPSHOT_PRUNE_BATCH_SIZE = (() => {
-  const parsed = Number(process.env.MINER_SNAPSHOT_PRUNE_BATCH_SIZE ?? 100);
+  const parsed = Number(process.env.MINER_SNAPSHOT_PRUNE_BATCH_SIZE ?? 5_000);
   if (!Number.isInteger(parsed) || parsed < 10) {
-    return 100;
+    return 5_000;
   }
   return Math.min(parsed, 10_000);
 })();
 
 const SNAPSHOT_PRUNE_MAX_BATCHES = (() => {
-  const parsed = Number(process.env.MINER_SNAPSHOT_PRUNE_MAX_BATCHES ?? 5);
+  const parsed = Number(process.env.MINER_SNAPSHOT_PRUNE_MAX_BATCHES ?? 20);
   if (!Number.isInteger(parsed) || parsed < 1) {
-    return 5;
+    return 20;
   }
   return Math.min(parsed, 500);
 })();
@@ -298,10 +298,11 @@ export class MinerPollingService {
             break;
           }
         }
+        const deletedRollups = await this.repository.pruneHourlyRollupsBefore(cutoffIso);
 
-        if (totalDeleted > 0) {
+        if (totalDeleted > 0 || deletedRollups > 0) {
           console.info(
-            `[miner-retention] Deleted ${totalDeleted} snapshot(s) older than ${cutoffIso} ` +
+            `[miner-retention] Deleted ${totalDeleted} snapshot(s) and ${deletedRollups} hourly rollup(s) older than ${cutoffIso} ` +
               `(retention ${SNAPSHOT_RETENTION_DAYS} day${SNAPSHOT_RETENTION_DAYS === 1 ? "" : "s"}).`
           );
         }
