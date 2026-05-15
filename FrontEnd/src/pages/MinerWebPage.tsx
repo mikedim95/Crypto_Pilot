@@ -10,8 +10,11 @@ interface MinerWebPageProps {
 }
 
 function buildMinerPageUrl(apiBaseUrl: string | null | undefined, ip: string | null | undefined): string {
-  const raw = apiBaseUrl?.trim() || (ip?.trim() ? `http://${ip.trim()}` : "");
-  return raw.replace(/\/+$/, "");
+  if (ip?.trim()) {
+    return `http://${ip.trim()}`;
+  }
+
+  return (apiBaseUrl?.trim() ?? "").replace(/\/api(?:\/v\d+)?\/?$/i, "").replace(/\/+$/, "");
 }
 
 export function MinerWebPage({ minerId, onBack }: MinerWebPageProps) {
