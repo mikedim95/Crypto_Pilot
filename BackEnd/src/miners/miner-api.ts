@@ -50,6 +50,10 @@ const fleetHistoryQuerySchema = z.object({
   scope: z.enum(["hour", "day", "week", "month"]).default("hour"),
 });
 
+const thermalReportsQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).default(30),
+});
+
 const verifyDraftSchema = addMinerSchema;
 
 const FLEET_HISTORY_SCOPE_CONFIG = {
@@ -779,6 +783,19 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
           hottestHotspotTemp,
           generatedAt: fleetSnapshot.generatedAt,
         },
+      });
+    })
+  );
+
+  router.get(
+    "/fleet/thermal-reports",
+    asyncHandler(async (req, res) => {
+      const query = parseOrRespond(thermalReportsQuerySchema, req.query, res);
+      if (!query) return;
+
+      res.json({
+        reports: await deps.repository.listThermalPresetReports(query.limit),
+        generatedAt: new Date().toISOString(),
       });
     })
   );

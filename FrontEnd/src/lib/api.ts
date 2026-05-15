@@ -49,6 +49,7 @@ import type {
   MinerPoolsResponse,
   MinerPresetOption,
   MinerResponse,
+  MinerThermalPresetReportsResponse,
   MinersResponse,
   NicehashOverviewResponse,
   NicehashConnectionStatus,
@@ -369,6 +370,8 @@ export const backendApi = {
   getFleetLive: () => apiRequest<FleetLiveResponse>("/api/fleet/live"),
   getFleetHistory: (scope: FleetHistoryScope = "hour") => apiRequest<FleetHistoryResponse>(withQuery("/api/fleet/history", { scope })),
   getFleetOverview: () => apiRequest<FleetOverviewResponse>("/api/fleet/overview"),
+  getMinerThermalPresetReports: (limit = 30) =>
+    apiRequest<MinerThermalPresetReportsResponse>(withQuery("/api/fleet/thermal-reports", { limit: String(limit) })),
   restartMiner: (minerId: number) =>
     apiRequest<MinerCommandResponse>(`/api/miners/${minerId}/restart`, {
       method: "POST",

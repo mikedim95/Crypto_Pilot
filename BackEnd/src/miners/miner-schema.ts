@@ -100,6 +100,7 @@ export const minerSchemaStatements = [
       error_text TEXT NULL,
       created_by VARCHAR(120) NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_miner_commands_thermal_reports (created_by, command_type, created_at),
       CONSTRAINT fk_miner_commands_miner
         FOREIGN KEY (miner_id) REFERENCES miners(id)
         ON DELETE CASCADE
@@ -113,4 +114,5 @@ export const minerColumnBackfillStatements = [
   `ALTER TABLE miners ADD COLUMN temp_control_max INT NULL`,
   `ALTER TABLE miners ADD COLUMN temp_control_last_adjusted_at DATETIME NULL`,
   `ALTER TABLE miner_status_snapshots ADD INDEX idx_miner_status_snapshots_created (created_at)`,
+  `ALTER TABLE miner_commands ADD INDEX idx_miner_commands_thermal_reports (created_by, command_type, created_at)`,
 ] as const;

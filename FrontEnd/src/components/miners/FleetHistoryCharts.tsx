@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Flame, Loader2 } from "lucide-react";
+import { Activity, Flame, Loader2, TrendingUp } from "lucide-react";
 import { Brush, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -89,6 +89,32 @@ function buildChartRows(history: FleetHistorySeries[], metric: ChartMetricKey) {
   });
 }
 
+function buildFleetRateRows(history: FleetHistorySeries[]) {
+  const rows = new Map<string, { timestamp: string; totalRateThs: number; onlineMiners: number }>();
+
+  for (const series of history) {
+    for (const point of series.points) {
+      const timestamp = String(point.timestamp);
+      const parsedTime = new Date(timestamp).getTime();
+      if (!Number.isFinite(parsedTime)) continue;
+
+      const row = rows.get(timestamp) ?? { timestamp, totalRateThs: 0, onlineMiners: 0 };
+      if (isChartMetricValue(point.totalRateThs, "totalRateThs")) {
+        row.totalRateThs += point.totalRateThs;
+      }
+      if (point.online) {
+        row.onlineMiners += 1;
+      }
+      rows.set(timestamp, row);
+    }
+  }
+
+  return Array.from(rows.values())
+    .filter((row) => row.totalRateThs > 0)
+    .map((row) => ({ ...row, totalRateThs: Number(row.totalRateThs.toFixed(2)) }))
+    .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
+}
+
 function getHistoryTimestampCount(history: FleetHistorySeries[]) {
   const timestamps = new Set<string>();
   for (const series of history) {
@@ -168,6 +194,12 @@ function getHashrateTicks(domain: [number, number]) {
   return ticks.length >= 2 ? ticks : [minValue, maxValue];
 }
 
+function getFleetRateDomain(rows: Array<{ totalRateThs: number }>): [number, number] {
+  if (rows.length === 0) return [0, 100];
+  const maxValue = Math.max(...rows.map((row) => row.totalRateThs));
+  return [0, Math.max(10, maxValue * 1.08)];
+}
+
 function FleetChartTooltip({
   active,
   label,
@@ -202,6 +234,113 @@ function FleetChartTooltip({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function FleetRateTooltip({
+  active,
+  label,
+  payload,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: Array<{ payload?: { totalRateThs?: number; onlineMiners?: number }; value?: number | string | null }>;
+}) {
+  const item = payload?.find((entry) => typeof entry.value === "number");
+  if (!active || !item || typeof item.value !== "number") return null;
+
+  return (
+    <div className="rounded-md border border-border bg-[#0f1320] px-3 py-3 font-mono text-xs shadow-xl">
+      <div className="mb-2 whitespace-nowrap text-muted-foreground">{formatTooltipTime(String(label))}</div>
+      <div className="flex items-center justify-between gap-6 whitespace-nowrap text-primary">
+        <span>Fleet Rate</span>
+        <span>{item.value.toFixed(2)} TH/s</span>
+      </div>
+      <div className="mt-2 text-muted-foreground">
+        Online miners: {typeof item.payload?.onlineMiners === "number" ? item.payload.onlineMiners : "--"}
+      </div>
+    </div>
+  );
+}
+
+function FleetRateChartCard({
+  history,
+  scope,
+  brushWindow,
+  isLoading = false,
+}: {
+  history: FleetHistorySeries[];
+  scope: FleetHistoryScope;
+  brushWindow: BrushWindow;
+  isLoading?: boolean;
+}) {
+  const rows = useMemo(() => buildFleetRateRows(history), [history]);
+  const safeBrushWindow = useMemo(
+    () => normalizeBrushWindow(brushWindow, getDefaultBrushWindow(scope, rows.length), rows.length),
+    [brushWindow, rows.length, scope]
+  );
+  const visibleRows = useMemo(() => rows.slice(safeBrushWindow.startIndex, safeBrushWindow.endIndex + 1), [rows, safeBrushWindow]);
+  const hasData = visibleRows.length > 0;
+  const rateDomain = useMemo(() => getFleetRateDomain(visibleRows), [visibleRows]);
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4 animate-fade-up">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Overall Fleet Rate</div>
+          <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">
+            Total persisted fleet hashrate in TH/s across all online miners.
+          </div>
+        </div>
+        {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : <TrendingUp className="h-4 w-4 text-primary" />}
+      </div>
+
+      {hasData ? (
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart syncId="fleet-history" data={visibleRows} margin={{ top: 12, right: 28, left: 8, bottom: 12 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={(value) => formatAxisTime(String(value), scope)}
+              minTickGap={24}
+              tick={{ fontSize: 11, fontFamily: "IBM Plex Mono", fill: "hsl(230, 15%, 55%)" }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              tickFormatter={(value: number) => `${value.toFixed(0)} TH`}
+              tick={{ fontSize: 11, fontFamily: "IBM Plex Mono", fill: "hsl(230, 15%, 55%)" }}
+              width={72}
+              axisLine={false}
+              tickLine={false}
+              domain={rateDomain}
+            />
+            <Tooltip content={<FleetRateTooltip />} wrapperStyle={{ outline: "none" }} />
+            <Line
+              type="monotone"
+              dataKey="totalRateThs"
+              name="Fleet Rate"
+              stroke="#00f5d4"
+              strokeWidth={2.5}
+              dot={false}
+              connectNulls={false}
+              isAnimationActive={true}
+              animationDuration={900}
+              animationEasing="ease-out"
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      ) : (
+        <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-border/80 bg-secondary/20">
+          <div className="max-w-sm text-center">
+            <div className="text-sm font-mono text-foreground">No overall fleet hashrate data yet.</div>
+            <div className="mt-2 text-xs font-mono text-muted-foreground">
+              The chart fills automatically as miner snapshots are written into MySQL by the fleet poller.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -362,6 +501,7 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
       </div>
 
       <div className="grid grid-cols-1 gap-5">
+        <FleetRateChartCard history={history} scope={scope} brushWindow={brushWindow} isLoading={isLoading} />
         <ChartCard
           title="Fleet Hashrate History"
           subtitle="Per-miner hashrate in TH/s from persisted backend snapshots."

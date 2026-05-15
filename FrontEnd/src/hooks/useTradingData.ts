@@ -317,6 +317,17 @@ export function useMiners() {
   });
 }
 
+export function useMinerThermalPresetReports(limit = 30) {
+  return useQuery({
+    queryKey: ["miner-thermal-preset-reports", limit],
+    queryFn: () => backendApi.getMinerThermalPresetReports(limit),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 0,
+  });
+}
+
 export function useMinerDetails(minerId: number | undefined) {
   return useQuery({
     queryKey: ["miner-details", minerId],

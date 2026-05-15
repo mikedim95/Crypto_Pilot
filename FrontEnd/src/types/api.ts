@@ -186,6 +186,27 @@ export interface FleetHistorySeries {
 
 export type FleetHistoryScope = "hour" | "day" | "week" | "month";
 
+export interface MinerThermalPresetReport {
+  id: number;
+  minerId: number;
+  minerName: string;
+  minerIp: string;
+  status: "pending" | "completed" | "failed";
+  previousPreset: string | null;
+  targetPreset: string | null;
+  hottestTemp: number | null;
+  temperatureMin: number | null;
+  temperatureMax: number | null;
+  direction: "increase" | "decrease" | null;
+  errorText: string | null;
+  createdAt: string;
+}
+
+export interface MinerThermalPresetReportsResponse {
+  reports: MinerThermalPresetReport[];
+  generatedAt: string;
+}
+
 export interface MinerVerificationResult {
   reachable: boolean;
   httpOk: boolean;

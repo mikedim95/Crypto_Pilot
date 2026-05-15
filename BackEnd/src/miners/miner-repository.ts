@@ -16,10 +16,18 @@ import {
   MinerSnapshotEntity,
   MinerSnapshotPersistInput,
   MinerSnapshotRecord,
+  MinerThermalPresetReport,
   MinerRecord,
   MinerUpdateInput,
 } from "./types.js";
-import { mapCommandRecord, mapMinerRecord, mapPoolRecord, mapSnapshotRecord, toMysqlDateTime } from "./miner-utils.js";
+import {
+  mapCommandRecord,
+  mapMinerRecord,
+  mapPoolRecord,
+  mapSnapshotRecord,
+  mapThermalPresetReportRecord,
+  toMysqlDateTime,
+} from "./miner-utils.js";
 
 const DEFAULT_SNAPSHOT_PRUNE_BATCH_SIZE = 100;
 
@@ -838,6 +846,27 @@ export class MinerRepository {
       [minerId, safeLimit]
     );
     return rows.map(mapCommandRecord);
+  }
+
+  async listThermalPresetReports(limit = 30): Promise<MinerThermalPresetReport[]> {
+    await this.init();
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 30;
+    const [rows] = await pool.query<Array<MinerCommandRecord & { miner_name: string; miner_ip: string }>>(
+      `
+        SELECT
+          c.*,
+          m.name AS miner_name,
+          m.ip AS miner_ip
+        FROM miner_commands c
+        INNER JOIN miners m ON m.id = c.miner_id
+        WHERE c.command_type = 'set-preset'
+          AND c.created_by = 'thermal-controller'
+        ORDER BY c.id DESC
+        LIMIT ?
+      `,
+      [safeLimit]
+    );
+    return rows.map(mapThermalPresetReportRecord);
   }
 
   private mapFleetHistoryBucket(

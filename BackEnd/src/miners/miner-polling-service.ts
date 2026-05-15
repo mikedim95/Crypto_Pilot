@@ -255,17 +255,28 @@ export class MinerPollingService {
     }
 
     let targetPreset: MinerPresetOption | null = null;
+    let direction: "increase" | "decrease" | null = null;
     if (hottestTemp < miner.temperatureControlMin! && currentIndex < presets.length - 1) {
       targetPreset = presets[currentIndex + 1];
+      direction = "increase";
     } else if (hottestTemp > miner.temperatureControlMax! && currentIndex > 0) {
       targetPreset = presets[currentIndex - 1];
+      direction = "decrease";
     }
 
     if (!targetPreset || targetPreset.name.trim().toLowerCase() === currentPresetName) {
       return;
     }
 
-    await this.commandService.setPreset(miner.id, targetPreset.name, "thermal-controller");
+    await this.commandService.setPreset(miner.id, targetPreset.name, "thermal-controller", {
+      previousPreset: readResult.liveData.presetName ?? miner.currentPreset ?? null,
+      targetPreset: targetPreset.name,
+      targetPresetPretty: targetPreset.pretty ?? null,
+      hottestTemp,
+      temperatureMin: miner.temperatureControlMin,
+      temperatureMax: miner.temperatureControlMax,
+      direction,
+    });
     await this.repository.updateMiner(miner.id, {
       currentPreset: targetPreset.name,
       temperatureControlLastAdjustedAt: new Date().toISOString(),

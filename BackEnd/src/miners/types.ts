@@ -147,6 +147,22 @@ export interface MinerCommandEntity {
   createdAt: string;
 }
 
+export interface MinerThermalPresetReport {
+  id: number;
+  minerId: number;
+  minerName: string;
+  minerIp: string;
+  status: MinerCommandStatus;
+  previousPreset: string | null;
+  targetPreset: string | null;
+  hottestTemp: number | null;
+  temperatureMin: number | null;
+  temperatureMax: number | null;
+  direction: "increase" | "decrease" | null;
+  errorText: string | null;
+  createdAt: string;
+}
+
 export interface MinerOverview {
   totalMiners: number;
   onlineMiners: number;

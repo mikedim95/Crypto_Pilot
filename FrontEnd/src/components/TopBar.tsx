@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Bell, Plus, RotateCcw, X } from "lucide-react";
 import { backendApi } from "@/lib/api";
-import { useDashboardData, useDemoAccountSettings } from "@/hooks/useTradingData";
+import { useDashboardData, useDemoAccountSettings, useMinerThermalPresetReports } from "@/hooks/useTradingData";
 import { SpinnerValue } from "@/components/SpinnerValue";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import type { AppSession, DemoAccountHolding, PortfolioAccountType } from "@/types/api";
+import type { AppSession, DemoAccountHolding, MinerThermalPresetReport, PortfolioAccountType } from "@/types/api";
 
 interface TopBarProps {
   accountType: PortfolioAccountType;
@@ -29,6 +29,7 @@ const DEFAULT_DEMO_ALLOCATION_TEMPLATE = [
   { symbol: "XRP", percent: 10 },
   { symbol: "USDC", percent: 20 },
 ];
+const THERMAL_REPORT_LAST_SEEN_KEY = "mytrader:thermal-report:last-seen-id";
 
 function createDraftRow(symbol = "", percent = ""): DemoAllocationDraftRow {
   return {
@@ -78,16 +79,69 @@ function getUserInitials(username: string): string {
     .join("") || "U";
 }
 
+function readStoredThermalReportId(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const stored = window.localStorage.getItem(THERMAL_REPORT_LAST_SEEN_KEY);
+    const parsed = Number(stored);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function storeThermalReportId(reportId: number): void {
+  if (typeof window === "undefined" || reportId <= 0) return;
+  try {
+    window.localStorage.setItem(THERMAL_REPORT_LAST_SEEN_KEY, String(reportId));
+  } catch {
+    // Notification read state is optional; blocked storage should not break the app shell.
+  }
+}
+
+function formatPresetLabel(value: string | null): string {
+  return value?.trim() ? value.trim() : "unknown";
+}
+
+function formatThermalReportTime(value: string): string {
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return "--";
+  return parsed.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function buildThermalReportMessage(report: MinerThermalPresetReport): string {
+  const action =
+    report.direction === "decrease"
+      ? "Lowered preset"
+      : report.direction === "increase"
+        ? "Raised preset"
+        : "Changed preset";
+  const presetChange = `${formatPresetLabel(report.previousPreset)} -> ${formatPresetLabel(report.targetPreset)}`;
+  const temperature =
+    typeof report.hottestTemp === "number" && typeof report.temperatureMin === "number" && typeof report.temperatureMax === "number"
+      ? ` at ${report.hottestTemp.toFixed(0)}C, target ${report.temperatureMin}-${report.temperatureMax}C`
+      : "";
+  return `${action}: ${presetChange}${temperature}.`;
+}
+
 export function TopBar({ accountType, onAccountTypeChange, session, onLogout, onProfileOpen }: TopBarProps) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
   const { data, isPending } = useDashboardData(accountType);
   const { data: demoAccountData, isPending: loadingDemoAccount } = useDemoAccountSettings();
+  const {
+    data: thermalReportsData,
+    isPending: loadingThermalReports,
+    error: thermalReportsError,
+  } = useMinerThermalPresetReports(30);
   const [isDemoSetupModalOpen, setIsDemoSetupModalOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [lastSeenThermalReportId, setLastSeenThermalReportId] = useState(readStoredThermalReportId);
   const [hasDismissedEmptyDemoPrompt, setHasDismissedEmptyDemoPrompt] = useState(false);
   const [demoBalanceDraft, setDemoBalanceDraft] = useState(String(DEFAULT_DEMO_BALANCE));
   const [allocationRows, setAllocationRows] = useState<DemoAllocationDraftRow[]>(createDefaultAllocationRows());
   const [setupErrorMessage, setSetupErrorMessage] = useState<string>("");
+  const notificationPanelRef = useRef<HTMLDivElement | null>(null);
   const isLoading = isPending && !data;
 
   const demoAccount = demoAccountData?.demoAccount;
@@ -240,6 +294,27 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
 
   const changePct = data?.portfolioChange24h;
   const changeValue = data?.portfolioChange24hValue;
+  const thermalReports = thermalReportsData?.reports ?? [];
+  const latestThermalReportId = thermalReports[0]?.id ?? 0;
+  const hasUnreadThermalReports = latestThermalReportId > lastSeenThermalReportId;
+
+  useEffect(() => {
+    if (!isNotificationsOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!notificationPanelRef.current?.contains(event.target as Node)) {
+        setIsNotificationsOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [isNotificationsOpen]);
+
+  useEffect(() => {
+    if (!isNotificationsOpen || latestThermalReportId <= lastSeenThermalReportId) return;
+    storeThermalReportId(latestThermalReportId);
+    setLastSeenThermalReportId(latestThermalReportId);
+  }, [isNotificationsOpen, latestThermalReportId, lastSeenThermalReportId]);
 
   return (
     <>
@@ -339,10 +414,62 @@ export function TopBar({ accountType, onAccountTypeChange, session, onLogout, on
             </button>
           ) : null}
 
-          <button className="relative rounded-full border border-border bg-secondary/30 p-2.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
-            <Bell className="h-4 w-4" />
-            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary animate-pulse" />
-          </button>
+          <div ref={notificationPanelRef} className="relative">
+            <button
+              type="button"
+              aria-label="Open notifications"
+              onClick={() => setIsNotificationsOpen((current) => !current)}
+              className={cn(
+                "relative rounded-full border border-border bg-secondary/30 p-2.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+                isNotificationsOpen ? "border-primary/40 text-primary" : ""
+              )}
+            >
+              <Bell className="h-4 w-4" />
+              {hasUnreadThermalReports ? (
+                <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary animate-pulse" />
+              ) : thermalReports.length > 0 ? (
+                <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-muted-foreground/50" />
+              ) : null}
+            </button>
+
+            {isNotificationsOpen ? (
+              <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-1rem))] overflow-hidden rounded-lg border border-border bg-card shadow-2xl">
+                <div className="border-b border-border px-4 py-3">
+                  <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Thermal Reports</div>
+                  <div className="mt-1 text-sm font-mono text-foreground">
+                    {thermalReports.length > 0 ? `${thermalReports.length} recent auto preset changes` : "No auto preset changes"}
+                  </div>
+                </div>
+
+                <div className="max-h-[24rem] overflow-y-auto">
+                  {loadingThermalReports ? (
+                    <div className="px-4 py-5 text-sm font-mono text-muted-foreground">Loading reports...</div>
+                  ) : thermalReportsError instanceof Error ? (
+                    <div className="px-4 py-5 text-sm font-mono text-negative">{thermalReportsError.message}</div>
+                  ) : thermalReports.length === 0 ? (
+                    <div className="px-4 py-5 text-sm font-mono text-muted-foreground">No automatic thermal changes yet.</div>
+                  ) : (
+                    thermalReports.map((report) => (
+                      <div key={report.id} className="border-b border-border/70 px-4 py-3 last:border-b-0">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-mono text-foreground">
+                              {report.minerName} <span className="text-muted-foreground">({report.minerIp})</span>
+                            </div>
+                            <div className="mt-1 text-xs leading-5 text-muted-foreground">{buildThermalReportMessage(report)}</div>
+                            {report.errorText ? <div className="mt-1 text-xs text-negative">{report.errorText}</div> : null}
+                          </div>
+                          <div className="shrink-0 text-right text-[11px] font-mono text-muted-foreground">
+                            {formatThermalReportTime(report.createdAt)}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
 
           <button
             onClick={onProfileOpen}

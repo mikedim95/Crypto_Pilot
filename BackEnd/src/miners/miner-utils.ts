@@ -7,6 +7,7 @@ import {
   MinerPoolRecord,
   MinerSnapshotEntity,
   MinerSnapshotRecord,
+  MinerThermalPresetReport,
   MinerRecord,
 } from "./types.js";
 
@@ -128,6 +129,46 @@ export function mapCommandRecord(record: MinerCommandRecord): MinerCommandEntity
     status: record.status,
     errorText: record.error_text,
     createdBy: record.created_by,
+    createdAt: record.created_at,
+  };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return parseJsonObject(value);
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readNumber(value: unknown): number | null {
+  const parsed = cleanNumber(value);
+  return parsed === null ? null : parsed;
+}
+
+export function mapThermalPresetReportRecord(
+  record: MinerCommandRecord & { miner_name: string; miner_ip: string }
+): MinerThermalPresetReport {
+  const request = readRecord(record.request_json);
+  const requestMiner = readRecord(request?.miner);
+  const requestOverclock = readRecord(requestMiner?.overclock);
+  const response = readRecord(record.response_json);
+  const audit = readRecord(response?.audit);
+  const direction = readString(audit?.direction);
+
+  return {
+    id: record.id,
+    minerId: record.miner_id,
+    minerName: record.miner_name,
+    minerIp: record.miner_ip,
+    status: record.status,
+    previousPreset: readString(audit?.previousPreset),
+    targetPreset: readString(audit?.targetPreset) ?? readString(requestOverclock?.preset),
+    hottestTemp: readNumber(audit?.hottestTemp),
+    temperatureMin: readNumber(audit?.temperatureMin),
+    temperatureMax: readNumber(audit?.temperatureMax),
+    direction: direction === "increase" || direction === "decrease" ? direction : null,
+    errorText: record.error_text,
     createdAt: record.created_at,
   };
 }

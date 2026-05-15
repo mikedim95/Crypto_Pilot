@@ -158,7 +158,8 @@ export class MinerCommandService {
     path: string,
     body?: unknown,
     createdBy?: string | null,
-    authorizationMode: "raw" | "bearer" = "raw"
+    authorizationMode: "raw" | "bearer" = "raw",
+    audit?: unknown
   ): Promise<{ liveData: MinerLiveData; response: unknown }> {
     const miner = await this.getMinerOrThrow(minerId);
 
@@ -166,7 +167,13 @@ export class MinerCommandService {
 
     try {
       response = await this.postWriteCommand(miner, path, body, authorizationMode);
-      await this.logCompletedCommand(minerId, commandType, body, response, createdBy);
+      await this.logCompletedCommand(
+        minerId,
+        commandType,
+        body,
+        audit ? { minerResponse: response, audit } : response,
+        createdBy
+      );
     } catch (error) {
       await this.logFailedCommand(minerId, commandType, body, error, createdBy);
       throw error;
@@ -270,7 +277,7 @@ export class MinerCommandService {
     return this.runCommand(minerId, "reboot", "/system/reboot", undefined, createdBy);
   }
 
-  setPreset(minerId: number, preset: string, createdBy?: string | null) {
+  setPreset(minerId: number, preset: string, createdBy?: string | null, audit?: unknown) {
     return this.runCommand(
       minerId,
       "set-preset",
@@ -282,7 +289,9 @@ export class MinerCommandService {
           },
         },
       },
-      createdBy
+      createdBy,
+      "raw",
+      audit
     );
   }
 
