@@ -111,7 +111,7 @@ function storeThermalReportId(reportId: number): void {
 }
 
 function formatPresetLabel(value: string | null): string {
-  return value?.trim() ? value.trim() : "unknown";
+  return value?.trim() ? value.trim() : "not recorded";
 }
 
 function formatThermalReportTime(value: string): string {
@@ -127,12 +127,17 @@ function buildThermalReportMessage(report: MinerThermalPresetReport): string {
       : report.direction === "increase"
         ? "Raised preset"
         : "Changed preset";
-  const presetChange = `${formatPresetLabel(report.previousPreset)} -> ${formatPresetLabel(report.targetPreset)}`;
+  const previousPreset = report.previousPreset?.trim();
+  const targetPreset = formatPresetLabel(report.targetPreset);
+  const presetChange = previousPreset
+    ? `${formatPresetLabel(previousPreset)} -> ${targetPreset}`
+    : `to ${targetPreset}`;
   const temperature =
     typeof report.hottestTemp === "number" && typeof report.temperatureMin === "number" && typeof report.temperatureMax === "number"
       ? ` at ${report.hottestTemp.toFixed(0)}C, target ${report.temperatureMin}-${report.temperatureMax}C`
       : "";
-  return `${action}: ${presetChange}${temperature}.`;
+  const missingPreviousPreset = previousPreset ? "" : " Previous preset was not recorded.";
+  return `${action}: ${presetChange}${temperature}.${missingPreviousPreset}`;
 }
 
 function isMissingThermalReportEndpoint(error: unknown): boolean {
@@ -155,10 +160,10 @@ function hottestMinerTemp(miner: MinerLiveData): number | null {
 
 function toneClasses(tone: MinerTimelineAlertTone): string {
   const tones: Record<MinerTimelineAlertTone, string> = {
-    info: "border-sky-400/25 bg-sky-400/10 text-sky-200 hover:border-sky-300/45",
-    success: "border-primary/25 bg-primary/10 text-primary hover:border-primary/45",
-    warning: "border-amber-400/30 bg-amber-400/10 text-amber-200 hover:border-amber-300/50",
-    critical: "border-negative/35 bg-negative/10 text-negative hover:border-negative/60",
+    info: "border-sky-700 bg-[#0f2534] text-sky-200 hover:border-sky-500",
+    success: "border-teal-700 bg-[#102b28] text-primary hover:border-primary",
+    warning: "border-amber-700 bg-[#2b2316] text-amber-200 hover:border-amber-500",
+    critical: "border-rose-700 bg-[#2b1420] text-negative hover:border-negative",
   };
   return tones[tone];
 }

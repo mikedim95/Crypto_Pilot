@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Flame, Loader2, TrendingUp } from "lucide-react";
-import { Brush, CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Brush, CartesianGrid, Legend, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
@@ -450,6 +450,15 @@ function ChartCard({
     highlightedIndex !== null && highlightedIndex >= safeBrushWindow.startIndex && highlightedIndex <= safeBrushWindow.endIndex
       ? rows[highlightedIndex]?.timestamp
       : null;
+  const selectedMinerKey = typeof selectedAlert?.minerId === "number" ? `miner_${selectedAlert.minerId}` : null;
+  const selectedPointValue =
+    selectedMinerKey && highlightedTimestamp ? rows[highlightedIndex ?? -1]?.[selectedMinerKey] : null;
+  const orderedSeriesMeta = useMemo(() => {
+    if (!selectedMinerKey) return seriesMeta;
+    const selected = seriesMeta.find((series) => series.key === selectedMinerKey);
+    if (!selected) return seriesMeta;
+    return [...seriesMeta.filter((series) => series.key !== selectedMinerKey), selected];
+  }, [selectedMinerKey, seriesMeta]);
   const tickStyle = {
     fontSize: isMobile ? 10 : 11,
     fontFamily: "IBM Plex Mono",
@@ -508,21 +517,34 @@ function ChartCard({
                   label={{ value: referenceLabel(selectedAlert, isMobile), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: isMobile ? 10 : 11 }}
                 />
               ) : null}
-              {seriesMeta.map((series, idx) => (
-                <Line
-                  key={series.key}
-                  type="monotone"
-                  dataKey={series.key}
-                  name={series.label}
-                  stroke={series.color}
+              {orderedSeriesMeta.map((series, idx) => {
+                const isSelectedMiner = selectedMinerKey === series.key;
+                return (
+                  <Line
+                    key={series.key}
+                    type="monotone"
+                    dataKey={series.key}
+                    name={series.label}
+                    stroke={isSelectedMiner ? (selectedAlert?.color ?? series.color) : series.color}
+                    strokeWidth={isSelectedMiner ? 4 : 2}
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={true}
+                    animationDuration={1200 + idx * 200}
+                    animationEasing="ease-out"
+                  />
+                );
+              })}
+              {typeof selectedPointValue === "number" && Number.isFinite(selectedPointValue) ? (
+                <ReferenceDot
+                  x={highlightedTimestamp}
+                  y={selectedPointValue}
+                  r={5}
+                  fill={selectedAlert?.color ?? "#00f5d4"}
+                  stroke="#0d111d"
                   strokeWidth={2}
-                  dot={false}
-                  connectNulls={false}
-                  isAnimationActive={true}
-                  animationDuration={1200 + idx * 200}
-                  animationEasing="ease-out"
                 />
-              ))}
+              ) : null}
               {showBrush && rows.length > 1 ? (
                 <Brush
                   dataKey="timestamp"
