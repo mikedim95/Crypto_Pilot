@@ -41,6 +41,9 @@ const DEFAULT_DEMO_ALLOCATION_TEMPLATE = [
   { symbol: "USDC", percent: 20 },
 ];
 const THERMAL_REPORT_LAST_SEEN_KEY = "mytrader:thermal-report:last-seen-id";
+const TELEMETRY_DELAY_ALERT_MINUTES = 15;
+const RECENT_THERMAL_REPORT_HOURS = 48;
+const MAX_RECENT_THERMAL_REPORTS = 12;
 
 function createDraftRow(symbol = "", percent = ""): DemoAllocationDraftRow {
   return {
@@ -123,10 +126,10 @@ function formatThermalReportTime(value: string): string {
 function buildThermalReportMessage(report: MinerThermalPresetReport): string {
   const action =
     report.direction === "decrease"
-      ? "Lowered preset"
+      ? "Auto lowered preset"
       : report.direction === "increase"
-        ? "Raised preset"
-        : "Changed preset";
+        ? "Auto raised preset"
+        : "Auto changed preset";
   const previousPreset = report.previousPreset?.trim();
   const targetPreset = formatPresetLabel(report.targetPreset);
   const presetChange = previousPreset
@@ -171,13 +174,21 @@ function toneClasses(tone: MinerTimelineAlertTone): string {
 function buildThermalAlert(report: MinerThermalPresetReport): MinerTimelineAlert {
   const tone: MinerTimelineAlertTone = report.status === "failed" ? "critical" : report.direction === "decrease" ? "warning" : "info";
   const color = tone === "critical" ? "#ef4444" : tone === "warning" ? "#f59e0b" : "#38bdf8";
+  const actionTitle =
+    report.status === "failed"
+      ? "auto preset failed"
+      : report.direction === "decrease"
+        ? "auto preset lowered"
+        : report.direction === "increase"
+          ? "auto preset raised"
+          : "auto preset changed";
   return {
     id: `thermal-${report.id}`,
     source: "thermal",
     tone,
     emoji: report.direction === "increase" ? "⚙️" : "🔥",
     color,
-    title: `${report.minerName} preset changed`,
+    title: `${report.minerName} ${actionTitle}`,
     message: buildThermalReportMessage(report),
     timestamp: toTimelineTimestamp(report.createdAt),
     minerId: report.minerId,
@@ -207,7 +218,7 @@ function buildLiveFleetAlerts(fleet: MinerLiveData[], miners: MinerEntity[]): Mi
         tone: "critical",
         emoji: "🔴",
         color: "#ef4444",
-        title: `${live.name} offline`,
+        title: `${live.name} miner offline`,
         message: `No live telemetry from ${live.ip}. Last seen ${formatThermalReportTime(timestamp)}.`,
         timestamp,
         minerId: live.minerId,
@@ -225,7 +236,7 @@ function buildLiveFleetAlerts(fleet: MinerLiveData[], miners: MinerEntity[]): Mi
         tone: critical ? "critical" : "warning",
         emoji: critical ? "🚨" : "🔥",
         color: critical ? "#ef4444" : "#f59e0b",
-        title: `${live.name} heat warning`,
+        title: `${live.name} temperature above target`,
         message: `Hottest sensor is ${hottestTemp.toFixed(0)}C${configuredMax ? `, target max ${configuredMax}C` : ""}.`,
         timestamp,
         minerId: live.minerId,
@@ -241,7 +252,7 @@ function buildLiveFleetAlerts(fleet: MinerLiveData[], miners: MinerEntity[]): Mi
         tone: "critical",
         emoji: "⚡",
         color: "#ef4444",
-        title: `${live.name} no hash rate`,
+        title: `${live.name} zero hash rate while mining`,
         message: `Miner is reporting mining state with ${(live.totalRateThs ?? 0).toFixed(2)} TH/s.`,
         timestamp,
         minerId: live.minerId,
@@ -250,15 +261,15 @@ function buildLiveFleetAlerts(fleet: MinerLiveData[], miners: MinerEntity[]): Mi
       });
     }
 
-    if (staleMinutes >= 5) {
+    if (staleMinutes >= TELEMETRY_DELAY_ALERT_MINUTES) {
       alerts.push({
         id: `stale-${live.minerId}`,
         source: "stale",
         tone: "warning",
         emoji: "⏱️",
         color: "#f59e0b",
-        title: `${live.name} stale telemetry`,
-        message: `Last seen ${Math.round(staleMinutes)} minutes ago.`,
+        title: `${live.name} telemetry delayed`,
+        message: `No fresh snapshot for ${Math.round(staleMinutes)} min. Miner may still be running; check network/API if it persists.`,
         timestamp,
         minerId: live.minerId,
         minerName: live.name,
@@ -288,7 +299,7 @@ export function TopBar({
     data: thermalReportsData,
     isPending: loadingThermalReports,
     error: thermalReportsError,
-  } = useMinerThermalPresetReports(30);
+  } = useMinerThermalPresetReports(MAX_RECENT_THERMAL_REPORTS);
   const { data: fleetLiveData } = useFleetLive(isAsicOnly);
   const { data: minersData } = useMiners(isAsicOnly);
   const [isDemoSetupModalOpen, setIsDemoSetupModalOpen] = useState(false);
@@ -456,15 +467,26 @@ export function TopBar({
 
   const changePct = data?.portfolioChange24h;
   const changeValue = data?.portfolioChange24hValue;
-  const thermalReports = thermalReportsData?.reports ?? [];
-  const timelineAlerts = useMemo(
-    () =>
-      [...buildLiveFleetAlerts(fleetLiveData?.miners ?? [], minersData?.miners ?? []), ...thermalReports.map(buildThermalAlert)].sort(
-        (left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
-      ),
-    [fleetLiveData?.miners, minersData?.miners, thermalReports]
-  );
-  const latestThermalReportId = thermalReports[0]?.id ?? 0;
+  const thermalReports = useMemo(() => thermalReportsData?.reports ?? [], [thermalReportsData?.reports]);
+  const timelineAlerts = useMemo(() => {
+    const nowMs = Date.now();
+    const recentThermalAlerts = thermalReports
+      .map(buildThermalAlert)
+      .filter((alert) => {
+        const alertMs = new Date(alert.timestamp).getTime();
+        return Number.isFinite(alertMs) && nowMs - alertMs <= RECENT_THERMAL_REPORT_HOURS * 60 * 60 * 1000;
+      })
+      .slice(0, MAX_RECENT_THERMAL_REPORTS);
+
+    return [...buildLiveFleetAlerts(fleetLiveData?.miners ?? [], minersData?.miners ?? []), ...recentThermalAlerts].sort(
+      (left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+    );
+  }, [fleetLiveData?.miners, minersData?.miners, thermalReports]);
+  const latestThermalReportId = timelineAlerts.reduce((latestId, alert) => {
+    if (alert.source !== "thermal") return latestId;
+    const reportId = Number(alert.id.replace("thermal-", ""));
+    return Number.isFinite(reportId) ? Math.max(latestId, reportId) : latestId;
+  }, 0);
   const hasUnreadThermalReports = latestThermalReportId > lastSeenThermalReportId || timelineAlerts.some((alert) => alert.tone === "critical");
   const thermalEndpointMissing = isMissingThermalReportEndpoint(thermalReportsError);
 
@@ -631,7 +653,7 @@ export function TopBar({
                 <div className="border-b border-border/80 px-4 py-3">
                   <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Fleet Alerts</div>
                   <div className="mt-1 text-sm font-mono text-foreground">
-                    {timelineAlerts.length > 0 ? `${timelineAlerts.length} active and recent reports` : "No active alerts"}
+                    {timelineAlerts.length > 0 ? `${timelineAlerts.length} current alerts / recent changes` : "No current alerts"}
                   </div>
                 </div>
 
@@ -648,7 +670,7 @@ export function TopBar({
                   ) : thermalReportsError instanceof Error && timelineAlerts.length === 0 ? (
                     <div className="px-4 py-5 text-sm font-mono text-muted-foreground">Thermal reports are unavailable.</div>
                   ) : timelineAlerts.length === 0 ? (
-                    <div className="px-4 py-5 text-sm font-mono text-muted-foreground">No active miner alerts or automatic thermal changes yet.</div>
+                    <div className="px-4 py-5 text-sm font-mono text-muted-foreground">No current miner alerts or recent automatic preset changes.</div>
                   ) : (
                     timelineAlerts.map((alert) => (
                       <button
