@@ -229,11 +229,18 @@ function stripApiPath(apiBaseUrl: string): string {
 }
 
 function resolveMinerWebTarget(miner: MinerEntity, req: Request): URL {
-  const targetPath = typeof req.params[0] === "string" && req.params[0].length > 0 ? `/${req.params[0]}` : "/";
+  const targetPath = normalizeMinerWebPath(typeof req.params[0] === "string" && req.params[0].length > 0 ? `/${req.params[0]}` : "/");
   const baseUrl = stripApiPath(miner.apiBaseUrl || `http://${miner.ip}`);
   const targetUrl = new URL(targetPath, `${baseUrl}/`);
   copyRequestQuery(req, targetUrl);
   return targetUrl;
+}
+
+function normalizeMinerWebPath(path: string): string {
+  if (/^\/[^/]+\.(?:js|css|map|wasm)$/i.test(path)) {
+    return `/assets${path}`;
+  }
+  return path;
 }
 
 function resolveMinerWebApiTarget(miner: MinerEntity, req: Request): URL {
