@@ -70,6 +70,23 @@ const LIVE_READ_TIMEOUT_MS = (() => {
   const parsed = Number(process.env.MINER_LIVE_READ_TIMEOUT_MS ?? process.env.MINER_READ_TIMEOUT_MS ?? 20_000);
   return Number.isFinite(parsed) && parsed >= 5_000 ? Math.round(parsed) : 20_000;
 })();
+const MINER_WEB_PROXY_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.MINER_WEB_PROXY_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(parsed) && parsed >= 5_000 ? Math.round(parsed) : 30_000;
+})();
+
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "content-encoding",
+  "content-length",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
 
 type FleetHistoryScope = z.infer<typeof fleetHistoryQuerySchema>["scope"];
 
@@ -205,6 +222,29 @@ function parseOrRespond<T>(schema: z.ZodSchema<T>, input: unknown, res: Response
 function getCreatedBy(req: Request): string | null {
   const candidate = req.header("x-user") ?? req.header("x-username");
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate.trim().toLowerCase() : null;
+}
+
+function stripApiPath(apiBaseUrl: string): string {
+  return apiBaseUrl.replace(/\/api(?:\/v\d+)?\/?$/i, "").replace(/\/+$/, "");
+}
+
+function resolveMinerWebTarget(miner: MinerEntity, req: Request): URL {
+  const targetPath = typeof req.params[0] === "string" && req.params[0].length > 0 ? `/${req.params[0]}` : "/";
+  const baseUrl = stripApiPath(miner.apiBaseUrl || `http://${miner.ip}`);
+  const targetUrl = new URL(targetPath, `${baseUrl}/`);
+  const queryIndex = req.originalUrl.indexOf("?");
+  if (queryIndex >= 0) {
+    targetUrl.search = req.originalUrl.slice(queryIndex);
+  }
+  return targetUrl;
+}
+
+function rewriteMinerWebContent(body: string, minerId: number): string {
+  const proxyRoot = `/api/miners/${minerId}/web/`;
+  return body
+    .replace(/(<head\b[^>]*>)/i, `$1<base href="${proxyRoot}">`)
+    .replace(/(href|src|action)=["']\/(?!\/)/gi, `$1="${proxyRoot}`)
+    .replace(/url\(\s*["']?\//gi, `url("${proxyRoot}`);
 }
 
 interface MinerApiDeps {
@@ -574,6 +614,67 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
 
       const liveData = await persistLiveRead(params.id);
       res.json({ liveData });
+    })
+  );
+
+  router.all(
+    "/miners/:id/web/*",
+    asyncHandler(async (req, res) => {
+      const params = parseOrRespond(idParamSchema, req.params, res);
+      if (!params) return;
+
+      const miner = await getMinerOrRespond(params.id, res);
+      if (!miner) return;
+
+      const targetUrl = resolveMinerWebTarget(miner, req);
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(req.headers)) {
+        const normalizedName = name.toLowerCase();
+        if (
+          HOP_BY_HOP_HEADERS.has(normalizedName) ||
+          ["host", "origin", "referer", "cookie"].includes(normalizedName) ||
+          value === undefined
+        ) {
+          continue;
+        }
+        headers.set(name, Array.isArray(value) ? value.join(", ") : String(value));
+      }
+      headers.set("host", targetUrl.host);
+
+      const requestBody =
+        req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.from(JSON.stringify(req.body ?? {}));
+
+      const upstream = await fetch(targetUrl, {
+        method: req.method,
+        headers,
+        body: requestBody,
+        redirect: "manual",
+        signal: AbortSignal.timeout(MINER_WEB_PROXY_TIMEOUT_MS),
+      });
+
+      res.status(upstream.status);
+      upstream.headers.forEach((value, name) => {
+        const normalizedName = name.toLowerCase();
+        if (!HOP_BY_HOP_HEADERS.has(normalizedName) && normalizedName !== "content-security-policy") {
+          res.setHeader(name, value);
+        }
+      });
+
+      const location = upstream.headers.get("location");
+      if (location) {
+        const rewrittenLocation = new URL(location, targetUrl);
+        res.setHeader("location", `/api/miners/${miner.id}/web${rewrittenLocation.pathname}${rewrittenLocation.search}`);
+      }
+
+      const contentType = upstream.headers.get("content-type") ?? "";
+      if (contentType.includes("text/html") || contentType.includes("text/css")) {
+        const text = await upstream.text();
+        res.send(rewriteMinerWebContent(text, miner.id));
+        return;
+      }
+
+      const payload = Buffer.from(await upstream.arrayBuffer());
+      res.send(payload);
     })
   );
 

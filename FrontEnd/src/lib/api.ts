@@ -100,6 +100,10 @@ const configuredApiUrl =
   "";
 const API_BASE_URL = configuredApiUrl.replace(/\/+$/, "").replace(/\/api$/, "");
 
+function buildApiUrl(path: string): string {
+  return `${API_BASE_URL}${path}`;
+}
+
 function resolveUserScope(): { userId?: number; username?: string } {
   const session = getStoredSession();
   if (!session) return {};
@@ -333,6 +337,7 @@ export const backendApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  buildMinerWebProxyUrl: (minerId: number) => buildApiUrl(`/api/miners/${minerId}/web/`),
   getMiners: () => apiRequest<MinersResponse>("/api/miners"),
   getMinerDetails: (minerId: number) => apiRequest<MinerDetailResponse>(`/api/miners/${minerId}`),
   updateMiner: (

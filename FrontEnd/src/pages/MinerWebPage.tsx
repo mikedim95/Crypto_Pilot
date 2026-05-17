@@ -3,25 +3,25 @@ import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, RefreshCcw } from "luc
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMinerDetails } from "@/hooks/useTradingData";
+import { backendApi } from "@/lib/api";
 
 interface MinerWebPageProps {
   minerId: number | undefined;
   onBack: () => void;
 }
 
-function buildMinerPageUrl(apiBaseUrl: string | null | undefined, ip: string | null | undefined): string {
-  if (ip?.trim()) {
-    return `http://${ip.trim()}`;
+function buildMinerProxyUrl(minerId: number | undefined): string {
+  if (typeof minerId !== "number") {
+    return "";
   }
-
-  return (apiBaseUrl?.trim() ?? "").replace(/\/api(?:\/v\d+)?\/?$/i, "").replace(/\/+$/, "");
+  return backendApi.buildMinerWebProxyUrl(minerId);
 }
 
 export function MinerWebPage({ minerId, onBack }: MinerWebPageProps) {
   const [frameKey, setFrameKey] = useState(0);
   const { data, isPending, error } = useMinerDetails(minerId);
   const miner = data?.miner;
-  const minerPageUrl = useMemo(() => buildMinerPageUrl(miner?.apiBaseUrl, miner?.ip), [miner?.apiBaseUrl, miner?.ip]);
+  const minerPageUrl = useMemo(() => buildMinerProxyUrl(miner?.id), [miner?.id]);
 
   return (
     <div className="flex min-h-full flex-col gap-3 p-3 sm:p-4 md:gap-4 md:p-6">
@@ -66,13 +66,13 @@ export function MinerWebPage({ minerId, onBack }: MinerWebPageProps) {
               <Button asChild className="gap-2 font-mono text-xs">
                 <a href={minerPageUrl} target="_blank" rel="noreferrer">
                   <ExternalLink className="h-4 w-4" />
-                  Open Tab
+                  Open Routed Tab
                 </a>
               </Button>
             ) : (
               <Button className="gap-2 font-mono text-xs" disabled>
                 <ExternalLink className="h-4 w-4" />
-                Open Tab
+                Open Routed Tab
               </Button>
             )}
           </div>
@@ -105,7 +105,7 @@ export function MinerWebPage({ minerId, onBack }: MinerWebPageProps) {
           <div className="flex min-h-[520px] items-center justify-center p-6 text-center">
             <div className="max-w-md">
               <div className="font-mono text-sm text-foreground">No live page URL is available for this miner.</div>
-              <div className="mt-2 text-xs text-muted-foreground">Verify the miner so the fleet database stores its VNish URL.</div>
+              <div className="mt-2 text-xs text-muted-foreground">Save the miner first so the Pi can route its web page through the app.</div>
             </div>
           </div>
         )}
