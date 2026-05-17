@@ -273,8 +273,8 @@ function rewriteMinerWebContent(body: string, minerId: number, contentType: stri
 
   if (contentType.includes("text/html")) {
     rewritten = rewritten
-      .replace(/(<head\b[^>]*>)/i, `$1<base href="${proxyRoot}">`)
       .replace(/(href|src|action)=["']\/(?!\/)/gi, `$1="${proxyRoot}`);
+    rewritten = rewritten.replace(/(<head\b[^>]*>)/i, `$1<base href="${proxyRoot}">`);
   }
 
   if (contentType.includes("text/css") || contentType.includes("text/html")) {
