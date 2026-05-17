@@ -1,6 +1,10 @@
 import "dotenv/config";
 import cors from "cors";
 import express, { NextFunction, Request, Response } from "express";
+import net from "node:net";
+import tls from "node:tls";
+import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import {
   clearCryptoComCredentials,
   getCryptoComConnectionStatus,
@@ -26,6 +30,7 @@ import { MinerPollingService } from "./miners/miner-polling-service.js";
 import { MinerReadService } from "./miners/miner-read-service.js";
 import { MinerRepository as FleetMinerRepository } from "./miners/miner-repository.js";
 import { MinerVerifyService } from "./miners/miner-verify-service.js";
+import type { MinerEntity } from "./miners/types.js";
 import { createDecisionRouter } from "./decision/decision-api.js";
 import { DecisionIntelligenceService } from "./decision/decision-service.js";
 import { createExecutionRouter } from "./execution/execution-api.js";
@@ -730,6 +735,103 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 let server: ReturnType<typeof app.listen> | null = null;
 
+function stripMinerApiPath(apiBaseUrl: string): string {
+  return apiBaseUrl.replace(/\/api(?:\/v\d+)?\/?$/i, "").replace(/\/+$/, "");
+}
+
+function resolveMinerWebSocketTarget(miner: MinerEntity, requestUrl: string): URL | null {
+  const parsed = new URL(requestUrl, "http://localhost");
+  const match = /^\/api\/miners\/\d+\/web(\/.*)$/i.exec(parsed.pathname);
+  if (!match) {
+    return null;
+  }
+
+  const baseUrl = stripMinerApiPath(miner.apiBaseUrl || `http://${miner.ip}`);
+  const targetUrl = new URL(match[1] || "/", `${baseUrl}/`);
+  targetUrl.search = parsed.search;
+  return targetUrl;
+}
+
+function writeWebSocketUpgradeRequest(
+  req: IncomingMessage,
+  upstream: net.Socket | tls.TLSSocket,
+  targetUrl: URL
+): void {
+  const defaultPort = targetUrl.protocol === "https:" ? "443" : "80";
+  const hostHeader = targetUrl.port && targetUrl.port !== defaultPort ? targetUrl.host : targetUrl.hostname;
+  const requestPath = `${targetUrl.pathname}${targetUrl.search}`;
+  const lines = [`${req.method ?? "GET"} ${requestPath} HTTP/${req.httpVersion}`, `Host: ${hostHeader}`];
+
+  for (const [name, value] of Object.entries(req.headers)) {
+    const normalizedName = name.toLowerCase();
+    if (value === undefined || normalizedName === "host") {
+      continue;
+    }
+
+    if (normalizedName === "origin") {
+      lines.push(`Origin: ${targetUrl.protocol}//${targetUrl.host}`);
+      continue;
+    }
+
+    lines.push(`${name}: ${Array.isArray(value) ? value.join(", ") : value}`);
+  }
+
+  upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
+}
+
+async function handleMinerWebSocketUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<boolean> {
+  const requestUrl = req.url ?? "/";
+  const parsed = new URL(requestUrl, "http://localhost");
+  const match = /^\/api\/miners\/(\d+)\/web\/api\/v1\/logs-ws(?:\/|$)/i.exec(parsed.pathname);
+  if (!match) {
+    return false;
+  }
+
+  const minerId = Number(match[1]);
+  const miner = Number.isInteger(minerId) && minerId > 0 ? await minerRepository.getMinerById(minerId) : null;
+  if (!miner) {
+    socket.destroy();
+    return true;
+  }
+
+  const targetUrl = resolveMinerWebSocketTarget(miner, requestUrl);
+  if (!targetUrl) {
+    socket.destroy();
+    return true;
+  }
+
+  const targetPort = Number(targetUrl.port || (targetUrl.protocol === "https:" ? 443 : 80));
+  const upstream =
+    targetUrl.protocol === "https:"
+      ? tls.connect({ host: targetUrl.hostname, port: targetPort, servername: targetUrl.hostname })
+      : net.connect({ host: targetUrl.hostname, port: targetPort });
+
+  upstream.once("connect", () => {
+    writeWebSocketUpgradeRequest(req, upstream, targetUrl);
+    if (head.length > 0) {
+      upstream.write(head);
+    }
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+  });
+
+  upstream.once("error", (error) => {
+    logger.warn(
+      {
+        minerId,
+        target: targetUrl.href,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "Miner WebSocket proxy failed."
+    );
+    socket.destroy();
+  });
+  socket.once("error", () => upstream.destroy());
+  socket.once("close", () => upstream.destroy());
+
+  return true;
+}
+
 async function initializeOptionalSubsystem(
   subsystem: string,
   init: () => Promise<void>,
@@ -779,6 +881,21 @@ async function bootstrap(): Promise<void> {
   server = app.listen(port, () => {
     // Keep startup log minimal and avoid printing credentials.
     logger.info({ port, asicOnlyMode }, "Backend listening.");
+  });
+  server.on("upgrade", (req, socket, head) => {
+    void handleMinerWebSocketUpgrade(req, socket, head).then((handled) => {
+      if (!handled) {
+        socket.destroy();
+      }
+    }).catch((error) => {
+      logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "WebSocket upgrade failed."
+      );
+      socket.destroy();
+    });
   });
 
   if (!asicOnlyMode) {

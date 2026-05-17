@@ -237,8 +237,8 @@ function resolveMinerWebTarget(miner: MinerEntity, req: Request): URL {
 }
 
 function normalizeMinerWebPath(path: string): string {
-  if (/^\/[^/]+\.(?:js|css|map|wasm)$/i.test(path)) {
-    return `/assets${path}`;
+  if (!path.startsWith("/assets/") && /\.(?:js|css|map|wasm)$/i.test(path)) {
+    return `/assets/${path.split("/").filter(Boolean).at(-1) ?? ""}`;
   }
   return path;
 }
