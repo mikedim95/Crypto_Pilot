@@ -239,12 +239,24 @@ function resolveMinerWebTarget(miner: MinerEntity, req: Request): URL {
   return targetUrl;
 }
 
-function rewriteMinerWebContent(body: string, minerId: number): string {
+function rewriteMinerWebContent(body: string, minerId: number, contentType: string): string {
   const proxyRoot = `/api/miners/${minerId}/web/`;
-  return body
-    .replace(/(<head\b[^>]*>)/i, `$1<base href="${proxyRoot}">`)
-    .replace(/(href|src|action)=["']\/(?!\/)/gi, `$1="${proxyRoot}`)
-    .replace(/url\(\s*["']?\//gi, `url("${proxyRoot}`);
+  const apiProxyRoot = `${proxyRoot}api/v1`;
+  let rewritten = body
+    .replace(/(["'`])\/api\/v1(?=[/"'`?])/g, `$1${apiProxyRoot}`)
+    .replace(/(["'`])\/api\/v1(?=["'`])/g, `$1${apiProxyRoot}`);
+
+  if (contentType.includes("text/html")) {
+    rewritten = rewritten
+      .replace(/(<head\b[^>]*>)/i, `$1<base href="${proxyRoot}">`)
+      .replace(/(href|src|action)=["']\/(?!\/)/gi, `$1="${proxyRoot}`);
+  }
+
+  if (contentType.includes("text/css") || contentType.includes("text/html")) {
+    rewritten = rewritten.replace(/url\(\s*["']?\//gi, `url("${proxyRoot}`);
+  }
+
+  return rewritten;
 }
 
 interface MinerApiDeps {
@@ -667,9 +679,14 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       }
 
       const contentType = upstream.headers.get("content-type") ?? "";
-      if (contentType.includes("text/html") || contentType.includes("text/css")) {
+      if (
+        contentType.includes("text/html") ||
+        contentType.includes("text/css") ||
+        contentType.includes("javascript") ||
+        contentType.includes("ecmascript")
+      ) {
         const text = await upstream.text();
-        res.send(rewriteMinerWebContent(text, miner.id));
+        res.send(rewriteMinerWebContent(text, miner.id, contentType));
         return;
       }
 
