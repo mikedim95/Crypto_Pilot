@@ -3,15 +3,20 @@ services:
     image: docker.io/${DOCKERHUB_NAMESPACE:-mikedim95}/mytrader-backend:${BACKEND_TAG:-latest}
     container_name: mytrader-backend
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 384m
     environment:
       PORT: "3001"
       APP_VERSION: "${BACKEND_TAG:-latest}"
+      NODE_OPTIONS: "${BACKEND_NODE_OPTIONS:---max-old-space-size=192}"
+      ASIC_ONLY_MODE: "${ASIC_ONLY_MODE:-true}"
       CORS_ORIGIN: "http://${PI_HOST_OR_IP:-localhost}:8080,http://localhost:8080"
       MYAPP_DB_HOST: "mysql"
       MYAPP_DB_PORT: "3306"
       MYAPP_DB_NAME: "${MYSQL_DATABASE:-mytrader}"
       MYAPP_DB_USER: "${MYSQL_USER:-mytrader}"
       MYAPP_DB_PASSWORD: "${MYSQL_PASSWORD:-change-me}"
+      MYAPP_DB_CONNECTION_LIMIT: "${MYAPP_DB_CONNECTION_LIMIT:-3}"
       USER_CREDENTIALS_SECRET: "${USER_CREDENTIALS_SECRET:-change-this-user-credentials-secret}"
       STRATEGY_STORE_PATH: "/app/data/strategy-store.json"
       STRATEGY_DB_INIT_RETRY_INTERVAL_MS: "${STRATEGY_DB_INIT_RETRY_INTERVAL_MS:-5000}"
@@ -19,6 +24,8 @@ services:
       MINER_INGEST_URL: "${MINER_INGEST_URL:-}"
       MINER_INGEST_TOKEN: "${MINER_INGEST_TOKEN:-}"
       MINER_POLL_MS: "${MINER_POLL_MS:-60000}"
+      MINER_POLL_CONCURRENCY: "${MINER_POLL_CONCURRENCY:-1}"
+      MINER_SNAPSHOT_RETENTION_DAYS: "${MINER_SNAPSHOT_RETENTION_DAYS:-7}"
       MINER_PUSH_SOURCE: "${MINER_PUSH_SOURCE:-pi}"
       MINER_PUSH_TIMEOUT_MS: "${MINER_PUSH_TIMEOUT_MS:-8000}"
       STRATEGY_REQUIRE_APPROVAL_FOR_REAL_RUNS: "${STRATEGY_REQUIRE_APPROVAL_FOR_REAL_RUNS:-true}"
@@ -51,6 +58,8 @@ services:
     image: docker.io/${DOCKERHUB_NAMESPACE:-mikedim95}/mytrader-frontend:${FRONTEND_TAG:-latest}
     container_name: mytrader-frontend
     restart: unless-stopped
+    mem_limit: 64m
+    memswap_limit: 96m
     depends_on:
       - backend
     ports:
@@ -60,7 +69,20 @@ services:
     image: mysql:8.0
     container_name: mytrader-mysql
     restart: unless-stopped
-    command: ["--default-authentication-plugin=mysql_native_password"]
+    mem_limit: 384m
+    memswap_limit: 512m
+    command:
+      [
+        "--default-authentication-plugin=mysql_native_password",
+        "--performance-schema=OFF",
+        "--innodb-buffer-pool-size=128M",
+        "--innodb-log-buffer-size=8M",
+        "--max-connections=25",
+        "--table-open-cache=200",
+        "--tmp-table-size=16M",
+        "--max-heap-table-size=16M",
+        "--skip-host-cache",
+      ]
     environment:
       MYSQL_DATABASE: "${MYSQL_DATABASE:-mytrader}"
       MYSQL_USER: "${MYSQL_USER:-mytrader}"

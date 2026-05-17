@@ -89,6 +89,7 @@ const minerPollMs =
 const rawMinerPollConcurrency = Number(process.env.MINER_POLL_CONCURRENCY ?? 3);
 const minerPollConcurrency =
   Number.isFinite(rawMinerPollConcurrency) && rawMinerPollConcurrency >= 1 ? Math.floor(rawMinerPollConcurrency) : 3;
+const asicOnlyMode = ["1", "true", "yes"].includes((process.env.ASIC_ONLY_MODE ?? "").trim().toLowerCase());
 
 const strategyRepository = new StrategyRepository(process.env.STRATEGY_STORE_PATH);
 const walletRepository = createWalletRepository(logger.child({ module: "wallet-repository" }));
@@ -771,23 +772,27 @@ const shutdown = async (): Promise<void> => {
 };
 
 async function bootstrap(): Promise<void> {
-  await strategyRepository.init();
+  if (!asicOnlyMode) {
+    await strategyRepository.init();
+  }
 
   server = app.listen(port, () => {
     // Keep startup log minimal and avoid printing credentials.
-    logger.info({ port }, "Backend listening.");
+    logger.info({ port, asicOnlyMode }, "Backend listening.");
   });
 
-  void initializeOptionalSubsystem("performance-tracker", () => performanceTracker.init(), () => {
-    performanceTracker.start();
-  });
-  void initializeOptionalSubsystem("signal-review-service", () => signalOutcomeService.init());
+  if (!asicOnlyMode) {
+    void initializeOptionalSubsystem("performance-tracker", () => performanceTracker.init(), () => {
+      performanceTracker.start();
+    });
+    void initializeOptionalSubsystem("signal-review-service", () => signalOutcomeService.init());
+    strategyScheduler.start().catch((error) => {
+      logger.error({ error }, "Strategy scheduler failed to start.");
+    });
+  }
+
   void initializeOptionalSubsystem("miner-repository", () => minerRepository.init(), () => {
     minerPollingService.start();
-  });
-
-  strategyScheduler.start().catch((error) => {
-    logger.error({ error }, "Strategy scheduler failed to start.");
   });
 }
 
