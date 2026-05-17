@@ -85,32 +85,6 @@ services:
       retries: 10
       start_period: 30s
 
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: mytrader-n8n
-    profiles: ["automation"]
-    restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
-    environment:
-      DB_TYPE: mysqldb
-      DB_MYSQLDB_HOST: mysql
-      DB_MYSQLDB_PORT: "3306"
-      DB_MYSQLDB_DATABASE: "${MYSQL_DATABASE:-mytrader}"
-      DB_MYSQLDB_USER: "${MYSQL_USER:-mytrader}"
-      DB_MYSQLDB_PASSWORD: "${MYSQL_PASSWORD:-change-me}"
-      N8N_HOST: "${PI_HOST_OR_IP:-localhost}"
-      N8N_PORT: "5678"
-      N8N_PROTOCOL: "http"
-      WEBHOOK_URL: "http://${PI_HOST_OR_IP:-localhost}:5678/"
-      GENERIC_TIMEZONE: "${GENERIC_TIMEZONE:-UTC}"
-    volumes:
-      - n8n_data:/home/node/.n8n
-    ports:
-      - "5678:5678"
-
 volumes:
   backend_data:
   mysql_data:
-  n8n_data:

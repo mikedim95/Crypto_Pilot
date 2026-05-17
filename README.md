@@ -80,7 +80,6 @@ A ready-to-run Compose stack is provided at `deploy/pi/docker-compose.yml` for A
 - `docker.io/<DOCKERHUB_NAMESPACE>/mytrader-backend:${BACKEND_TAG}`
 - `docker.io/<DOCKERHUB_NAMESPACE>/mytrader-frontend:${FRONTEND_TAG}`
 - `mysql:8.0` (persistent volume)
-- optional `n8nio/n8n:latest` profile for workflow automation
 
 The compose stack is now designed for controlled deployments. Automatic background image updates are intentionally not part of the default stack.
 
@@ -96,19 +95,12 @@ docker compose pull
 docker compose up -d
 ```
 
-To enable `n8n` as well:
-
-```bash
-docker compose --profile automation up -d
-```
-
 Endpoints after startup:
 
 - Frontend: `http://<PI_HOST_OR_IP>:8080`
 - Frontend version: `http://<PI_HOST_OR_IP>:8080/version.json`
 - Backend health: `http://<PI_HOST_OR_IP>:3001/api/health`
 - Backend readiness: `http://<PI_HOST_OR_IP>:3001/ready`
-- n8n: `http://<PI_HOST_OR_IP>:5678` when the `automation` profile is enabled
 
 ### Pi-safe strategy defaults
 
