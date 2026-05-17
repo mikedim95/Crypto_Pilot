@@ -279,7 +279,8 @@ function rewriteMinerWebContent(body: string, minerId: number, contentType: stri
   const apiProxyRoot = `${proxyRoot}api/v1`;
   let rewritten = body
     .replace(/(["'`])\/api\/v1(?=[/"'`?])/g, `$1${apiProxyRoot}`)
-    .replace(/(["'`])\/api\/v1(?=["'`])/g, `$1${apiProxyRoot}`);
+    .replace(/(["'`])\/api\/v1(?=["'`])/g, `$1${apiProxyRoot}`)
+    .replace(/(["'`])\/assets\//g, `$1${proxyRoot}assets/`);
 
   if (contentType.includes("text/html")) {
     rewritten = rewritten
