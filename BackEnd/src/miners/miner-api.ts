@@ -55,6 +55,9 @@ const thermalReportsQuerySchema = z.object({
 });
 
 const verifyDraftSchema = addMinerSchema;
+const rootMinerAssetSchema = z.object({
+  assetName: z.string().regex(/^[A-Za-z0-9_.-]+\.(?:js|css|map|wasm)$/i),
+});
 
 const FLEET_HISTORY_SCOPE_CONFIG = {
   hour: { rangeMs: 60 * 60 * 1000, bucketMs: 60 * 1000 },
@@ -358,6 +361,31 @@ interface MinerApiDeps {
 
 export function createMinerRouter(deps: MinerApiDeps): Router {
   const router = Router();
+
+  router.get(
+    "/miner-web-assets/:assetName",
+    asyncHandler(async (req, res) => {
+      const parsed = parseOrRespond(rootMinerAssetSchema, req.params, res);
+      if (!parsed) return;
+
+      const minerId = inferMinerIdFromReferer(req);
+      if (!minerId) {
+        res.status(404).json({ message: "Miner asset referer is missing." });
+        return;
+      }
+
+      const miner = await deps.repository.getMinerById(minerId);
+      if (!miner) {
+        res.status(404).json({ message: "Miner not found." });
+        return;
+      }
+
+      const baseUrl = stripApiPath(miner.apiBaseUrl || `http://${miner.ip}`);
+      const targetUrl = new URL(`/assets/${parsed.assetName}`, `${baseUrl}/`);
+      copyRequestQuery(req, targetUrl);
+      await proxyMinerWebRequest(req, res, miner, targetUrl);
+    })
+  );
 
   const stripRawMinerPayload = (miner: MinerLiveData): Omit<MinerLiveData, "raw"> => {
     const { raw: _raw, ...sanitized } = miner;
