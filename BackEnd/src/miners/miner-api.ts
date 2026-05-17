@@ -232,11 +232,36 @@ function resolveMinerWebTarget(miner: MinerEntity, req: Request): URL {
   const targetPath = typeof req.params[0] === "string" && req.params[0].length > 0 ? `/${req.params[0]}` : "/";
   const baseUrl = stripApiPath(miner.apiBaseUrl || `http://${miner.ip}`);
   const targetUrl = new URL(targetPath, `${baseUrl}/`);
+  copyRequestQuery(req, targetUrl);
+  return targetUrl;
+}
+
+function resolveMinerWebApiTarget(miner: MinerEntity, req: Request): URL {
+  const targetPath = typeof req.params[0] === "string" && req.params[0].length > 0 ? `/api/v1/${req.params[0]}` : "/api/v1/";
+  const baseUrl = stripApiPath(miner.apiBaseUrl || `http://${miner.ip}`);
+  const targetUrl = new URL(targetPath, `${baseUrl}/`);
+  copyRequestQuery(req, targetUrl);
+  return targetUrl;
+}
+
+function copyRequestQuery(req: Request, targetUrl: URL): void {
   const queryIndex = req.originalUrl.indexOf("?");
   if (queryIndex >= 0) {
     targetUrl.search = req.originalUrl.slice(queryIndex);
   }
-  return targetUrl;
+}
+
+function inferMinerIdFromReferer(req: Request): number | null {
+  const referer = req.get("referer");
+  if (!referer) return null;
+  try {
+    const parsed = new URL(referer);
+    const match = /\/api\/miners\/(\d+)\/web(?:\/|$)/.exec(parsed.pathname);
+    const minerId = match ? Number(match[1]) : NaN;
+    return Number.isInteger(minerId) && minerId > 0 ? minerId : null;
+  } catch {
+    return null;
+  }
 }
 
 function rewriteMinerWebContent(body: string, minerId: number, contentType: string): string {
@@ -257,6 +282,62 @@ function rewriteMinerWebContent(body: string, minerId: number, contentType: stri
   }
 
   return rewritten;
+}
+
+async function proxyMinerWebRequest(req: Request, res: Response, miner: MinerEntity, targetUrl: URL): Promise<void> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    const normalizedName = name.toLowerCase();
+    if (
+      HOP_BY_HOP_HEADERS.has(normalizedName) ||
+      ["host", "origin", "referer", "cookie"].includes(normalizedName) ||
+      value === undefined
+    ) {
+      continue;
+    }
+    headers.set(name, Array.isArray(value) ? value.join(", ") : String(value));
+  }
+  headers.set("host", targetUrl.host);
+
+  const requestBody =
+    req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.from(JSON.stringify(req.body ?? {}));
+
+  const upstream = await fetch(targetUrl, {
+    method: req.method,
+    headers,
+    body: requestBody,
+    redirect: "manual",
+    signal: AbortSignal.timeout(MINER_WEB_PROXY_TIMEOUT_MS),
+  });
+
+  res.status(upstream.status);
+  upstream.headers.forEach((value, name) => {
+    const normalizedName = name.toLowerCase();
+    if (!HOP_BY_HOP_HEADERS.has(normalizedName) && normalizedName !== "content-security-policy") {
+      res.setHeader(name, value);
+    }
+  });
+
+  const location = upstream.headers.get("location");
+  if (location) {
+    const rewrittenLocation = new URL(location, targetUrl);
+    res.setHeader("location", `/api/miners/${miner.id}/web${rewrittenLocation.pathname}${rewrittenLocation.search}`);
+  }
+
+  const contentType = upstream.headers.get("content-type") ?? "";
+  if (
+    contentType.includes("text/html") ||
+    contentType.includes("text/css") ||
+    contentType.includes("javascript") ||
+    contentType.includes("ecmascript")
+  ) {
+    const text = await upstream.text();
+    res.send(rewriteMinerWebContent(text, miner.id, contentType));
+    return;
+  }
+
+  const payload = Buffer.from(await upstream.arrayBuffer());
+  res.send(payload);
 }
 
 interface MinerApiDeps {
@@ -639,59 +720,24 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       if (!miner) return;
 
       const targetUrl = resolveMinerWebTarget(miner, req);
-      const headers = new Headers();
-      for (const [name, value] of Object.entries(req.headers)) {
-        const normalizedName = name.toLowerCase();
-        if (
-          HOP_BY_HOP_HEADERS.has(normalizedName) ||
-          ["host", "origin", "referer", "cookie"].includes(normalizedName) ||
-          value === undefined
-        ) {
-          continue;
-        }
-        headers.set(name, Array.isArray(value) ? value.join(", ") : String(value));
-      }
-      headers.set("host", targetUrl.host);
+      await proxyMinerWebRequest(req, res, miner, targetUrl);
+    })
+  );
 
-      const requestBody =
-        req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.from(JSON.stringify(req.body ?? {}));
-
-      const upstream = await fetch(targetUrl, {
-        method: req.method,
-        headers,
-        body: requestBody,
-        redirect: "manual",
-        signal: AbortSignal.timeout(MINER_WEB_PROXY_TIMEOUT_MS),
-      });
-
-      res.status(upstream.status);
-      upstream.headers.forEach((value, name) => {
-        const normalizedName = name.toLowerCase();
-        if (!HOP_BY_HOP_HEADERS.has(normalizedName) && normalizedName !== "content-security-policy") {
-          res.setHeader(name, value);
-        }
-      });
-
-      const location = upstream.headers.get("location");
-      if (location) {
-        const rewrittenLocation = new URL(location, targetUrl);
-        res.setHeader("location", `/api/miners/${miner.id}/web${rewrittenLocation.pathname}${rewrittenLocation.search}`);
-      }
-
-      const contentType = upstream.headers.get("content-type") ?? "";
-      if (
-        contentType.includes("text/html") ||
-        contentType.includes("text/css") ||
-        contentType.includes("javascript") ||
-        contentType.includes("ecmascript")
-      ) {
-        const text = await upstream.text();
-        res.send(rewriteMinerWebContent(text, miner.id, contentType));
+  router.all(
+    "/v1/*",
+    asyncHandler(async (req, res) => {
+      const minerId = inferMinerIdFromReferer(req);
+      if (!minerId) {
+        res.status(404).json({ message: "Miner web API proxy requires a miner web page referrer." });
         return;
       }
 
-      const payload = Buffer.from(await upstream.arrayBuffer());
-      res.send(payload);
+      const miner = await getMinerOrRespond(minerId, res);
+      if (!miner) return;
+
+      const targetUrl = resolveMinerWebApiTarget(miner, req);
+      await proxyMinerWebRequest(req, res, miner, targetUrl);
     })
   );
 
