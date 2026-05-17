@@ -274,6 +274,14 @@ function inferMinerIdFromReferer(req: Request): number | null {
   }
 }
 
+function inferMinerIdFromCookie(req: Request): number | null {
+  const cookieHeader = req.get("cookie");
+  if (!cookieHeader) return null;
+  const match = /(?:^|;\s*)mytrader_miner_web_id=(\d+)(?:;|$)/.exec(cookieHeader);
+  const minerId = match ? Number(match[1]) : NaN;
+  return Number.isInteger(minerId) && minerId > 0 ? minerId : null;
+}
+
 function rewriteMinerWebContent(body: string, minerId: number, contentType: string): string {
   const proxyRoot = `/api/miners/${minerId}/web/`;
   const apiProxyRoot = `${proxyRoot}api/v1`;
@@ -336,6 +344,14 @@ async function proxyMinerWebRequest(req: Request, res: Response, miner: MinerEnt
   }
 
   const contentType = upstream.headers.get("content-type") ?? "";
+  if (contentType.includes("text/html")) {
+    res.cookie("mytrader_miner_web_id", String(miner.id), {
+      httpOnly: false,
+      sameSite: "lax",
+      path: "/",
+    });
+  }
+
   if (
     contentType.includes("text/html") ||
     contentType.includes("text/css") ||
@@ -369,13 +385,8 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const parsed = parseOrRespond(rootMinerAssetSchema, req.params, res);
       if (!parsed) return;
 
-      const minerId = inferMinerIdFromReferer(req);
-      if (!minerId) {
-        res.status(404).json({ message: "Miner asset referer is missing." });
-        return;
-      }
-
-      const miner = await deps.repository.getMinerById(minerId);
+      const minerId = inferMinerIdFromReferer(req) ?? inferMinerIdFromCookie(req);
+      const miner = minerId ? await deps.repository.getMinerById(minerId) : (await deps.repository.listMiners())[0] ?? null;
       if (!miner) {
         res.status(404).json({ message: "Miner not found." });
         return;
