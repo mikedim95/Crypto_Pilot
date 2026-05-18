@@ -338,6 +338,10 @@ export class MinerPollingService {
   async pollOnce(): Promise<MinerPollResult> {
     const now = Date.now();
     if (this.running) {
+      console.warn(
+        `[miner-poll] Skipped poll because another poll is still running ` +
+          `(runningForMs=${this.runningStartedAt ? now - this.runningStartedAt : "unknown"}).`
+      );
       return {
         started: false,
         success: false,
@@ -422,6 +426,7 @@ export class MinerPollingService {
               };
             } catch (error) {
               const message = error instanceof Error ? error.message : "Unknown polling error.";
+              console.warn(`[miner-poll] Miner ${miner.id} (${miner.name}, ${miner.ip}) failed: ${message}`);
               return {
                 miner,
                 error: message,
@@ -454,13 +459,19 @@ export class MinerPollingService {
 
       this.startOldSnapshotPruneIfDue();
 
+      const durationMs = Date.now() - now;
+      console.info(
+        `[miner-poll] Completed poll timestamp=${pollTimestamp} total=${totalMiners} ` +
+          `succeeded=${succeeded} failed=${failed} durationMs=${durationMs}.`
+      );
+
       return {
         started: true,
         success: failed === 0,
         skippedReason: null,
         startedAt: new Date(now).toISOString(),
         finishedAt: new Date().toISOString(),
-        durationMs: Date.now() - now,
+        durationMs,
         runningForMs: null,
         totalMiners,
         succeeded,
