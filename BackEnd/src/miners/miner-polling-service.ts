@@ -160,7 +160,7 @@ export class MinerPollingService {
     this.timer = null;
   }
 
-  private async markOfflineAfterFailure(minerId: number, errorMessage: string): Promise<void> {
+  private async markOfflineAfterFailure(minerId: number, errorMessage: string, createdAt: string): Promise<void> {
     const nextFailureCount = (this.failureCounts.get(minerId) ?? 0) + 1;
     this.failureCounts.set(minerId, nextFailureCount);
 
@@ -175,6 +175,7 @@ export class MinerPollingService {
     const miner = await this.repository.getMinerById(minerId);
     await this.repository.saveSnapshot({
       minerId,
+      createdAt,
       online: false,
       minerState: "offline",
       presetName: miner?.currentPreset ?? null,
@@ -354,6 +355,7 @@ export class MinerPollingService {
 
     this.running = true;
     this.runningStartedAt = now;
+    const pollTimestamp = new Date(now).toISOString();
     let totalMiners = 0;
     let succeeded = 0;
     let failed = 0;
@@ -383,6 +385,7 @@ export class MinerPollingService {
 
               await this.repository.saveSnapshot({
                 minerId: miner.id,
+                createdAt: pollTimestamp,
                 online: readResult.liveData.online,
                 minerState: readResult.liveData.minerState,
                 presetName: readResult.liveData.presetName,
@@ -399,7 +402,7 @@ export class MinerPollingService {
 
               await this.repository.replacePools(miner.id, normalizePoolsForStorage(readResult.cgminerPools));
               await this.repository.updateMiner(miner.id, {
-                lastSeenAt: readResult.liveData.lastSeenAt ?? new Date().toISOString(),
+                lastSeenAt: readResult.liveData.lastSeenAt ?? pollTimestamp,
                 lastError: null,
                 currentPreset: readResult.liveData.presetName,
               });
@@ -435,7 +438,7 @@ export class MinerPollingService {
 
           if (result.error) {
             failed += 1;
-            await this.markOfflineAfterFailure(result.miner.id, result.error);
+            await this.markOfflineAfterFailure(result.miner.id, result.error, pollTimestamp);
           } else {
             succeeded += 1;
           }

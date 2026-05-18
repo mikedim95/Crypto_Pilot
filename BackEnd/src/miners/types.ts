@@ -337,6 +337,7 @@ export interface MinerCommandLogInput {
 
 export interface MinerSnapshotPersistInput {
   minerId: number;
+  createdAt?: string | null;
   online: boolean;
   minerState: string | null;
   presetName: string | null;

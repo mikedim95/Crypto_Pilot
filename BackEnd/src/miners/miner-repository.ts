@@ -278,6 +278,7 @@ export class MinerRepository {
 
   async saveSnapshot(input: MinerSnapshotPersistInput): Promise<MinerSnapshotEntity> {
     return this.withConnection(async (conn) => {
+      const createdAt = toMysqlDateTime(input.createdAt);
       const [result] = await conn.query(
         `
           INSERT INTO miner_status_snapshots (
@@ -300,8 +301,9 @@ export class MinerRepository {
             fan_rpm_3,
             fan_rpm_4,
             power_watts,
-            raw_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            raw_json,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
         `,
         [
           input.minerId,
@@ -324,6 +326,7 @@ export class MinerRepository {
           input.fanRpm[3] ?? null,
           input.powerWatts,
           JSON.stringify(input.raw ?? null),
+          createdAt,
         ]
       );
 
@@ -362,7 +365,7 @@ export class MinerRepository {
           sample_count
         ) VALUES (
           ?,
-          FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(CURRENT_TIMESTAMP) / 3600) * 3600),
+          FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(COALESCE(?, CURRENT_TIMESTAMP)) / 3600) * 3600),
           ?,
           ?,
           ?,
@@ -384,6 +387,7 @@ export class MinerRepository {
       `,
       [
         input.minerId,
+        toMysqlDateTime(input.createdAt),
         input.online,
         totalRate ?? 0,
         totalRate === null ? 0 : 1,
