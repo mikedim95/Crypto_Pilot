@@ -232,8 +232,17 @@ function getHashrateTicks(domain: [number, number]) {
 
 function getFleetRateDomain(rows: Array<{ totalRateThs: number }>): [number, number] {
   if (rows.length === 0) return [0, 100];
-  const maxValue = Math.max(...rows.map((row) => row.totalRateThs));
-  return [0, Math.max(10, maxValue * 1.08)];
+  const values = rows.map((row) => row.totalRateThs).filter((value) => Number.isFinite(value) && value > 0);
+  if (values.length === 0) return [0, 100];
+
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  if (minValue === maxValue) {
+    return [Math.max(0, minValue * 0.95), maxValue * 1.05];
+  }
+
+  const padding = (maxValue - minValue) * 0.08;
+  return [Math.max(0, minValue - padding), maxValue + padding];
 }
 
 function FleetChartTooltip({
