@@ -10,6 +10,7 @@ interface CachedToken {
 
 export class MinerAuthService {
   private readonly tokenCache = new Map<number, CachedToken>();
+  private readonly tokenRefreshes = new Map<number, Promise<string>>();
 
   constructor(
     private readonly httpClient: MinerHttpClient,
@@ -27,17 +28,32 @@ export class MinerAuthService {
       return cached.token;
     }
 
-    return this.storeUnlockedToken(miner, await this.unlock(miner));
+    return this.refreshTokenOnce(miner);
   }
 
   async retryWithFreshToken(miner: MinerEntity): Promise<string | null> {
     this.invalidate(miner.id);
-    return this.getValidToken(miner);
+    return this.refreshTokenOnce(miner);
   }
 
   async getFreshToken(miner: MinerEntity): Promise<string> {
     this.invalidate(miner.id);
-    return this.storeUnlockedToken(miner, await this.unlock(miner));
+    return this.refreshTokenOnce(miner);
+  }
+
+  private refreshTokenOnce(miner: MinerEntity): Promise<string> {
+    const existing = this.tokenRefreshes.get(miner.id);
+    if (existing) {
+      return existing;
+    }
+
+    const refresh = this.unlock(miner)
+      .then((token) => this.storeUnlockedToken(miner, token))
+      .finally(() => {
+        this.tokenRefreshes.delete(miner.id);
+      });
+    this.tokenRefreshes.set(miner.id, refresh);
+    return refresh;
   }
 
   private storeUnlockedToken(miner: MinerEntity, token: string): string {

@@ -339,7 +339,10 @@ export class MinerRepository {
   }
 
   private async upsertHourlyRollup(conn: PoolConnection, input: MinerSnapshotPersistInput): Promise<void> {
-    const totalRate = typeof input.totalRateThs === "number" && Number.isFinite(input.totalRateThs) ? input.totalRateThs : null;
+    const totalRate =
+      typeof input.totalRateThs === "number" && Number.isFinite(input.totalRateThs) && input.totalRateThs > 0
+        ? input.totalRateThs
+        : null;
     const powerWatts = typeof input.powerWatts === "number" && Number.isFinite(input.powerWatts) && input.powerWatts > 0 ? input.powerWatts : null;
     const maxBoardTemp = maxNullable(input.boardTemps.map(validTemperature));
     const maxHotspotTemp = maxNullable(input.hotspotTemps.map(validTemperature));
@@ -513,7 +516,7 @@ export class MinerRepository {
         SELECT
           FLOOR(UNIX_TIMESTAMP(created_at) / ?) AS bucket_index,
           MAX(CASE WHEN online = 1 THEN 1 ELSE 0 END) AS online,
-          AVG(CASE WHEN total_rate_ths IS NOT NULL THEN total_rate_ths END) AS avg_total_rate_ths,
+          AVG(CASE WHEN total_rate_ths > 0 THEN total_rate_ths END) AS avg_total_rate_ths,
           AVG(CASE WHEN power_watts > 0 THEN power_watts END) AS avg_power_watts,
           NULLIF(
             MAX(
@@ -653,7 +656,7 @@ export class MinerRepository {
         };
 
       existing.online = existing.online || row.online === true || row.online === 1;
-      if (typeof row.total_rate_ths === "number" && Number.isFinite(row.total_rate_ths)) {
+      if (typeof row.total_rate_ths === "number" && Number.isFinite(row.total_rate_ths) && row.total_rate_ths > 0) {
         existing.totalRateSum += row.total_rate_ths;
         existing.totalRateCount += 1;
       }
