@@ -521,6 +521,10 @@ function ChartCard({
   brushWindow,
   onBrushChange,
   selectedAlert,
+  activeSeriesKey,
+  pinnedSeriesKey,
+  onActiveSeriesChange,
+  onTogglePinnedSeries,
   showBrush = false,
   isLoading = false,
 }: {
@@ -528,11 +532,13 @@ function ChartCard({
   metric: ChartMetricKey; scope: FleetHistoryScope; unit: string; brushWindow: BrushWindow;
   onBrushChange: (next: { startIndex?: number; endIndex?: number } | undefined, rowCount: number) => void;
   selectedAlert?: MinerTimelineAlert | null;
+  activeSeriesKey: string | null;
+  pinnedSeriesKey: string | null;
+  onActiveSeriesChange: (key: string | null) => void;
+  onTogglePinnedSeries: (key: string) => void;
   showBrush?: boolean; isLoading?: boolean;
 }) {
   const isMobile = useIsMobile();
-  const [activeSeriesKey, setActiveSeriesKey] = useState<string | null>(null);
-  const [pinnedSeriesKey, setPinnedSeriesKey] = useState<string | null>(null);
   const seriesMeta = useMemo(() => getSeriesMeta(history, metric), [history, metric]);
   const rows = useMemo(() => buildChartRows(history, metric), [history, metric]);
   const hasData = rows.length > 0 && seriesMeta.length > 0;
@@ -557,9 +563,6 @@ function ChartCard({
   const highlightedSeriesKey = activeSeriesKey ?? pinnedSeriesKey ?? selectedMinerKey;
   const selectedPointValue =
     selectedMinerKey && highlightedTimestamp ? rows[highlightedIndex ?? -1]?.[selectedMinerKey] : null;
-  const handleTogglePinnedSeriesKey = (key: string) => {
-    setPinnedSeriesKey((current) => (current === key ? null : key));
-  };
   const tickStyle = {
     fontSize: isMobile ? 10 : 11,
     fontFamily: "IBM Plex Mono",
@@ -615,8 +618,8 @@ function ChartCard({
                       activeSeriesKey={activeSeriesKey}
                       pinnedSeriesKey={pinnedSeriesKey}
                       selectedMinerKey={selectedMinerKey}
-                      onHover={setActiveSeriesKey}
-                      onTogglePin={handleTogglePinnedSeriesKey}
+                      onHover={onActiveSeriesChange}
+                      onTogglePin={onTogglePinnedSeries}
                     />
                   }
                 />
@@ -650,14 +653,14 @@ function ChartCard({
                       <ActiveMinerDot
                         dataKey={series.key}
                         highlightedSeriesKey={highlightedSeriesKey}
-                        setActiveSeriesKey={setActiveSeriesKey}
-                        togglePinnedSeriesKey={handleTogglePinnedSeriesKey}
+                        setActiveSeriesKey={onActiveSeriesChange}
+                        togglePinnedSeriesKey={onTogglePinnedSeries}
                       />
                     }
                     connectNulls={false}
-                    onMouseEnter={() => setActiveSeriesKey(series.key)}
-                    onMouseLeave={() => setActiveSeriesKey(null)}
-                    onClick={() => handleTogglePinnedSeriesKey(series.key)}
+                    onMouseEnter={() => onActiveSeriesChange(series.key)}
+                    onMouseLeave={() => onActiveSeriesChange(null)}
+                    onClick={() => onTogglePinnedSeries(series.key)}
                     isAnimationActive={false}
                   />
                 );
@@ -708,6 +711,8 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
   const rowCount = useMemo(() => getHistoryTimestampCount(history), [history]);
   const fleetRateRows = useMemo(() => buildFleetRateRows(history), [history]);
   const [brushWindow, setBrushWindow] = useState<BrushWindow>(() => getDefaultBrushWindow(scope, rowCount));
+  const [activeSeriesKey, setActiveSeriesKey] = useState<string | null>(null);
+  const [pinnedSeriesKey, setPinnedSeriesKey] = useState<string | null>(null);
 
   useEffect(() => {
     setBrushWindow(getDefaultBrushWindow(scope, rowCount));
@@ -721,6 +726,10 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
 
   const handleBrushChange = (next: { startIndex?: number; endIndex?: number } | undefined, chartRowCount: number) => {
     setBrushWindow((previous) => normalizeBrushWindow(next, previous, chartRowCount));
+  };
+
+  const handleTogglePinnedSeries = (key: string) => {
+    setPinnedSeriesKey((current) => (current === key ? null : key));
   };
 
   return (
@@ -767,6 +776,10 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
           brushWindow={brushWindow}
           onBrushChange={handleBrushChange}
           selectedAlert={selectedAlert}
+          activeSeriesKey={activeSeriesKey}
+          pinnedSeriesKey={pinnedSeriesKey}
+          onActiveSeriesChange={setActiveSeriesKey}
+          onTogglePinnedSeries={handleTogglePinnedSeries}
           isLoading={isLoading}
         />
         <ChartCard
@@ -780,6 +793,10 @@ export function FleetHistoryCharts({ history, scope, onScopeChange, isLoading = 
           brushWindow={brushWindow}
           onBrushChange={handleBrushChange}
           selectedAlert={selectedAlert}
+          activeSeriesKey={activeSeriesKey}
+          pinnedSeriesKey={pinnedSeriesKey}
+          onActiveSeriesChange={setActiveSeriesKey}
+          onTogglePinnedSeries={handleTogglePinnedSeries}
           showBrush={true}
           isLoading={isLoading}
         />
