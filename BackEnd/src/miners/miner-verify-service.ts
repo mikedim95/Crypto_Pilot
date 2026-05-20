@@ -166,6 +166,7 @@ export class MinerVerifyService {
         currentPreset: presetDetails.name,
         model: identity.model,
         firmware: identity.firmware,
+        macAddress: identity.macAddress,
         capabilities,
         presets: normalizePresetOptions(presets),
         error,

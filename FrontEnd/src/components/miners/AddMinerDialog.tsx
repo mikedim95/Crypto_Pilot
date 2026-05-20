@@ -119,6 +119,10 @@ export function AddMinerDialog({ isVerifying, isSaving, verification, onVerify, 
                     <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Firmware</div>
                     <div className="mt-1 truncate font-mono text-xs text-foreground">{verification.firmware ?? "--"}</div>
                   </div>
+                  <div className="rounded-md border border-border bg-background/60 p-3 sm:col-span-2">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">MAC</div>
+                    <div className="mt-1 truncate font-mono text-xs text-foreground">{verification.macAddress ?? "--"}</div>
+                  </div>
                 </div>
 
                 <div className="rounded-md border border-border bg-background/60 p-3">

@@ -99,6 +99,7 @@ export class MinerReadService {
     await this.repository.updateMiner(miner.id, {
       model: nextIdentity.model ?? miner.model,
       firmware: nextIdentity.firmware ?? miner.firmware,
+      macAddress: nextIdentity.macAddress ?? miner.macAddress,
       currentPreset: liveData.presetName,
       lastSeenAt: nowIso,
       lastError: liveData.online ? null : miner.lastError,
@@ -107,6 +108,7 @@ export class MinerReadService {
     const refreshedMiner = await this.repository.getMinerById(miner.id);
     if (refreshedMiner) {
       liveData.lastSeenAt = refreshedMiner.lastSeenAt;
+      liveData.macAddress = refreshedMiner.macAddress;
     }
 
     return {

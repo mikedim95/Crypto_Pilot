@@ -67,6 +67,7 @@ export function mapMinerRecord(record: MinerRecord): MinerEntity {
     id: record.id,
     name: record.name,
     ip: record.ip,
+    macAddress: record.mac_address,
     apiBaseUrl: record.api_base_url,
     passwordEnc: record.password_enc,
     model: record.model,

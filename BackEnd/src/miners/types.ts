@@ -18,6 +18,7 @@ export interface MinerRecord extends RowDataPacket {
   id: number;
   name: string;
   ip: string;
+  mac_address: string | null;
   api_base_url: string;
   password_enc: string;
   model: string | null;
@@ -40,6 +41,7 @@ export interface MinerEntity {
   id: number;
   name: string;
   ip: string;
+  macAddress: string | null;
   apiBaseUrl: string;
   passwordEnc: string;
   model: string | null;
@@ -183,6 +185,7 @@ export interface MinerVerificationResult {
   currentPreset: string | null;
   model: string | null;
   firmware: string | null;
+  macAddress: string | null;
   capabilities: MinerCapabilities;
   presets: Array<{
     name: string;
@@ -212,6 +215,7 @@ export interface MinerLiveData {
   minerId: number;
   name: string;
   ip: string;
+  macAddress: string | null;
   online: boolean;
   minerState: string | null;
   unlocked: boolean;
@@ -284,6 +288,7 @@ export interface MinerCreateInput {
 export interface MinerUpdateInput {
   name?: string;
   ip?: string;
+  macAddress?: string | null;
   password?: string;
   isEnabled?: boolean;
   temperatureControlEnabled?: boolean;
@@ -302,6 +307,7 @@ export interface MinerPersistInput {
   name: string;
   ip: string;
   apiBaseUrl: string;
+  macAddress?: string | null;
   passwordEnc: string;
   model?: string | null;
   firmware?: string | null;

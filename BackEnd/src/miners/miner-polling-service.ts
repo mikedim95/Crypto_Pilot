@@ -409,6 +409,7 @@ export class MinerPollingService {
                 lastSeenAt: readResult.liveData.lastSeenAt ?? pollTimestamp,
                 lastError: null,
                 currentPreset: readResult.liveData.presetName,
+                macAddress: readResult.liveData.macAddress ?? miner.macAddress,
               });
 
               await this.applyTemperatureControl(miner, readResult).catch(async (error) => {

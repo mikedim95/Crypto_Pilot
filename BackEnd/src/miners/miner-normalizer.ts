@@ -134,6 +134,13 @@ function firstString(record: Record<string, unknown> | null | undefined, ...keys
   return firstParsedValue(record, keys, cleanString);
 }
 
+function normalizeMacAddress(value: string | null): string | null {
+  if (!value) return null;
+  const compact = value.replace(/[^a-fA-F0-9]/g, "").toUpperCase();
+  if (compact.length !== 12) return null;
+  return compact.match(/.{1,2}/g)?.join(":") ?? null;
+}
+
 function readHashrateAsThs(record: Record<string, unknown>): number | null {
   const normalizedDirect =
     normalizeHashrateToThs(
@@ -269,7 +276,7 @@ export function extractMinerIdentity(params: {
   summaryPayload?: Record<string, unknown> | null;
   infoPayload?: Record<string, unknown> | null;
   cgminerStats?: Record<string, unknown> | null;
-}): { model: string | null; firmware: string | null } {
+}): { model: string | null; firmware: string | null; macAddress: string | null } {
   const { statusPayload, summaryPayload = null, infoPayload = null, cgminerStats = null } = params;
   const summaryMiner = parseJsonObject(readField(summaryPayload ?? {}, "miner"));
   const infoSystem = parseJsonObject(readField(infoPayload ?? {}, "system"));
@@ -287,6 +294,13 @@ export function extractMinerIdentity(params: {
       firstString(infoSystem, "firmware", "fw_name", "version") ??
       typeDescriptor.firmware ??
       firstString(cgminerStats, "Cgminer"),
+    macAddress: normalizeMacAddress(
+      firstString(statusPayload, "mac", "mac_address", "macAddress", "macaddr", "network.mac", "network.mac_address") ??
+        firstString(summaryMiner, "mac", "mac_address", "macAddress", "macaddr", "network.mac") ??
+        firstString(infoPayload, "mac", "mac_address", "macAddress", "macaddr", "network.mac", "network.mac_address") ??
+        firstString(infoSystem, "mac", "mac_address", "macAddress", "macaddr", "ethaddr", "network.mac") ??
+        firstString(cgminerStats, "MAC", "Mac", "mac", "macaddr")
+    ),
   };
 }
 
@@ -654,6 +668,13 @@ export function normalizeMinerLiveData(params: {
     minerId: miner.id,
     name: miner.name,
     ip: miner.ip,
+    macAddress:
+      extractMinerIdentity({
+        statusPayload,
+        summaryPayload,
+        infoPayload,
+        cgminerStats,
+      }).macAddress ?? miner.macAddress,
     online: Boolean(
       statusPayload || perfSummaryPayload || summaryPayload || infoPayload || chipsPayload || cgminerStats || cgminerSummary || cgminerDevs.length > 0
     ),
@@ -731,6 +752,7 @@ export function buildMinerLiveDataFromSnapshot(
     minerId: miner.id,
     name: miner.name,
     ip: miner.ip,
+    macAddress: miner.macAddress,
     online: snapshot?.online ?? false,
     minerState: snapshot?.minerState ?? null,
     unlocked: Boolean(raw?.unlocked),

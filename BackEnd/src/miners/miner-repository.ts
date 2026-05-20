@@ -180,6 +180,7 @@ export class MinerRepository {
           INSERT INTO miners (
             name,
             ip,
+            mac_address,
             api_base_url,
             password_enc,
             model,
@@ -194,11 +195,12 @@ export class MinerRepository {
             last_seen_at,
             last_error,
             capabilities_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           input.name,
           input.ip,
+          input.macAddress ?? null,
           input.apiBaseUrl,
           input.passwordEnc,
           input.model ?? null,
@@ -237,6 +239,7 @@ export class MinerRepository {
 
       if (typeof patch.name === "string") push("name", patch.name);
       if (typeof patch.ip === "string") push("ip", patch.ip);
+      if ("macAddress" in patch) push("mac_address", patch.macAddress ?? null);
       if (typeof patch.apiBaseUrl === "string") push("api_base_url", patch.apiBaseUrl);
       if (typeof patch.passwordEnc === "string") push("password_enc", patch.passwordEnc);
       if ("model" in patch) push("model", patch.model ?? null);

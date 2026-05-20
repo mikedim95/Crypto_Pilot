@@ -539,6 +539,9 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       powerWatts: readResult.liveData.powerWatts,
       raw: liveDataToSnapshotRaw(readResult.liveData),
     });
+    if (readResult.liveData.macAddress && readResult.liveData.macAddress !== miner.macAddress) {
+      await deps.repository.updateMiner(minerId, { macAddress: readResult.liveData.macAddress });
+    }
     await deps.repository.replacePools(minerId, normalizePoolsForStorage(readResult.cgminerPools));
     return readResult.liveData;
   };
@@ -582,6 +585,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
         name: body.name,
         ip: body.ip,
         apiBaseUrl: verification.apiBaseUrl,
+        macAddress: verification.result.macAddress,
         passwordEnc: deps.cryptoService.encrypt(body.password),
         model: verification.result.model,
         firmware: verification.result.firmware,
@@ -713,6 +717,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
 
       await deps.repository.updateMiner(miner.id, {
         apiBaseUrl: verification.apiBaseUrl,
+        macAddress: verification.result.macAddress,
         model: verification.result.model,
         firmware: verification.result.firmware,
         currentPreset: verification.result.currentPreset,

@@ -4,6 +4,7 @@ export const minerSchemaStatements = [
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(120) NOT NULL,
       ip VARCHAR(45) NOT NULL UNIQUE,
+      mac_address VARCHAR(32) NULL,
       api_base_url VARCHAR(255) NOT NULL,
       password_enc TEXT NOT NULL,
       model VARCHAR(120) NULL,
@@ -113,6 +114,8 @@ export const minerColumnBackfillStatements = [
   `ALTER TABLE miners ADD COLUMN temp_control_min INT NULL`,
   `ALTER TABLE miners ADD COLUMN temp_control_max INT NULL`,
   `ALTER TABLE miners ADD COLUMN temp_control_last_adjusted_at DATETIME NULL`,
+  `ALTER TABLE miners ADD COLUMN mac_address VARCHAR(32) NULL`,
+  `ALTER TABLE miners ADD INDEX idx_miners_mac_address (mac_address)`,
   `ALTER TABLE miner_status_snapshots ADD INDEX idx_miner_status_snapshots_created (created_at)`,
   `ALTER TABLE miner_commands ADD INDEX idx_miner_commands_thermal_reports (created_by, command_type, created_at)`,
 ] as const;

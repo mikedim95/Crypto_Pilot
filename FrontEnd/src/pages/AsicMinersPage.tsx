@@ -7,6 +7,7 @@ import { BulkActionToolbar } from "@/components/miners/BulkActionToolbar";
 import { FleetOverviewCards } from "@/components/miners/FleetOverviewCards";
 import { FleetHistoryCharts } from "@/components/miners/FleetHistoryCharts";
 import { MinerTable } from "@/components/miners/MinerTable";
+import { MinerValueRanking } from "@/components/miners/MinerValueRanking";
 import { MinerDetailPanel } from "@/components/miners/MinerDetailPanel";
 import { AddMinerDialog } from "@/components/miners/AddMinerDialog";
 import { Button } from "@/components/ui/button";
@@ -374,6 +375,8 @@ export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMin
           }
         />
       ) : null}
+
+      <MinerValueRanking miners={miners} fleetLive={fleetLive} isLoading={isTableLoading || isFleetRefreshing} />
     </div>
   );
 }

@@ -92,6 +92,7 @@ export interface MinerEntity {
   id: number;
   name: string;
   ip: string;
+  macAddress: string | null;
   apiBaseUrl: string;
   model: string | null;
   firmware: string | null;
@@ -134,6 +135,7 @@ export interface MinerLiveData {
   minerId: number;
   name: string;
   ip: string;
+  macAddress: string | null;
   online: boolean;
   minerState: string | null;
   unlocked: boolean;
@@ -232,6 +234,7 @@ export interface MinerVerificationResult {
   currentPreset: string | null;
   model: string | null;
   firmware: string | null;
+  macAddress: string | null;
   capabilities: MinerCapabilities;
   presets: Array<{
     name: string;
