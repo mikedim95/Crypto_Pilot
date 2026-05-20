@@ -253,14 +253,14 @@ function FleetChartTooltip({
   payload,
   unit,
   metric,
-  activeSeriesKey,
+  highlightedSeriesKey,
 }: {
   active?: boolean;
   label?: string | number;
   payload?: Array<{ color?: string; dataKey?: string | number; name?: string | number; value?: number | string | null }>;
   unit: string;
   metric: ChartMetricKey;
-  activeSeriesKey: string | null;
+  highlightedSeriesKey: string | null;
 }) {
   const items =
     payload?.filter((item): item is { color?: string; dataKey?: string | number; name?: string | number; value: number } => typeof item.value === "number") ?? [];
@@ -273,7 +273,7 @@ function FleetChartTooltip({
       <div className="space-y-2">
         {items.map((item) => {
           const color = item.color ?? "hsl(var(--foreground))";
-          const isActive = activeSeriesKey === item.dataKey;
+          const isActive = highlightedSeriesKey === item.dataKey;
           return (
             <div
               key={`${item.name}-${item.value}`}
@@ -300,12 +300,13 @@ function ActiveMinerDot(props: {
   cy?: number;
   stroke?: string;
   dataKey: string;
-  activeSeriesKey: string | null;
+  highlightedSeriesKey: string | null;
   setActiveSeriesKey: (key: string | null) => void;
+  togglePinnedSeriesKey: (key: string) => void;
 }) {
-  const { cx, cy, stroke, dataKey, activeSeriesKey, setActiveSeriesKey } = props;
+  const { cx, cy, stroke, dataKey, highlightedSeriesKey, setActiveSeriesKey, togglePinnedSeriesKey } = props;
   if (typeof cx !== "number" || typeof cy !== "number") return null;
-  const isActive = activeSeriesKey === dataKey;
+  const isActive = highlightedSeriesKey === dataKey;
 
   return (
     <circle
@@ -318,6 +319,7 @@ function ActiveMinerDot(props: {
       className="cursor-crosshair transition-all"
       onMouseEnter={() => setActiveSeriesKey(dataKey)}
       onMouseLeave={() => setActiveSeriesKey(null)}
+      onClick={() => togglePinnedSeriesKey(dataKey)}
     />
   );
 }
@@ -325,13 +327,17 @@ function ActiveMinerDot(props: {
 function MinerLegend({
   payload,
   activeSeriesKey,
+  pinnedSeriesKey,
   selectedMinerKey,
   onHover,
+  onTogglePin,
 }: {
   payload?: Array<{ color?: string; dataKey?: string; value?: string }>;
   activeSeriesKey: string | null;
+  pinnedSeriesKey: string | null;
   selectedMinerKey: string | null;
   onHover: (key: string | null) => void;
+  onTogglePin: (key: string) => void;
 }) {
   if (!payload?.length) return null;
 
@@ -340,6 +346,7 @@ function MinerLegend({
       {payload.map((entry) => {
         const key = String(entry.dataKey ?? entry.value ?? "");
         const isActive = activeSeriesKey === key;
+        const isPinned = pinnedSeriesKey === key;
         const isSelected = selectedMinerKey === key;
 
         return (
@@ -348,18 +355,19 @@ function MinerLegend({
             type="button"
             className={cn(
               "inline-flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 transition-colors",
-              isActive || isSelected
+              isActive || isPinned || isSelected
                 ? "border-primary/50 bg-primary/10 text-foreground shadow-[0_0_0_1px_hsl(var(--primary)/0.18)]"
                 : "border-transparent text-muted-foreground hover:border-border hover:bg-secondary/30",
             )}
+            onClick={() => onTogglePin(key)}
             onMouseEnter={() => onHover(key)}
             onMouseLeave={() => onHover(null)}
             onFocus={() => onHover(key)}
             onBlur={() => onHover(null)}
-            title={String(entry.value ?? "")}
+            title={`${isPinned ? "Unpin" : "Pin"} ${String(entry.value ?? "")}`}
           >
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
-            <span className={cn("truncate", isActive || isSelected ? "font-semibold" : "")}>{entry.value}</span>
+            <span className="truncate">{entry.value}</span>
           </button>
         );
       })}
@@ -524,6 +532,7 @@ function ChartCard({
 }) {
   const isMobile = useIsMobile();
   const [activeSeriesKey, setActiveSeriesKey] = useState<string | null>(null);
+  const [pinnedSeriesKey, setPinnedSeriesKey] = useState<string | null>(null);
   const seriesMeta = useMemo(() => getSeriesMeta(history, metric), [history, metric]);
   const rows = useMemo(() => buildChartRows(history, metric), [history, metric]);
   const hasData = rows.length > 0 && seriesMeta.length > 0;
@@ -545,15 +554,12 @@ function ChartCard({
       ? rows[highlightedIndex]?.timestamp
       : null;
   const selectedMinerKey = typeof selectedAlert?.minerId === "number" ? `miner_${selectedAlert.minerId}` : null;
+  const highlightedSeriesKey = activeSeriesKey ?? pinnedSeriesKey ?? selectedMinerKey;
   const selectedPointValue =
     selectedMinerKey && highlightedTimestamp ? rows[highlightedIndex ?? -1]?.[selectedMinerKey] : null;
-  const orderedSeriesMeta = useMemo(() => {
-    const pinnedSeriesKey = activeSeriesKey ?? selectedMinerKey;
-    if (!pinnedSeriesKey) return seriesMeta;
-    const selected = seriesMeta.find((series) => series.key === pinnedSeriesKey);
-    if (!selected) return seriesMeta;
-    return [...seriesMeta.filter((series) => series.key !== pinnedSeriesKey), selected];
-  }, [activeSeriesKey, selectedMinerKey, seriesMeta]);
+  const handleTogglePinnedSeriesKey = (key: string) => {
+    setPinnedSeriesKey((current) => (current === key ? null : key));
+  };
   const tickStyle = {
     fontSize: isMobile ? 10 : 11,
     fontFamily: "IBM Plex Mono",
@@ -599,12 +605,20 @@ function ChartCard({
                 ticks={metric === "totalRateThs" ? hashrateTicks : undefined}
               />
               <Tooltip
-                content={<FleetChartTooltip unit={unit} metric={metric} activeSeriesKey={activeSeriesKey} />}
+                content={<FleetChartTooltip unit={unit} metric={metric} highlightedSeriesKey={highlightedSeriesKey} />}
                 wrapperStyle={{ outline: "none" }}
               />
               {!isMobile ? (
                 <Legend
-                  content={<MinerLegend activeSeriesKey={activeSeriesKey} selectedMinerKey={selectedMinerKey} onHover={setActiveSeriesKey} />}
+                  content={
+                    <MinerLegend
+                      activeSeriesKey={activeSeriesKey}
+                      pinnedSeriesKey={pinnedSeriesKey}
+                      selectedMinerKey={selectedMinerKey}
+                      onHover={setActiveSeriesKey}
+                      onTogglePin={handleTogglePinnedSeriesKey}
+                    />
+                  }
                 />
               ) : null}
               {highlightedTimestamp ? (
@@ -616,11 +630,12 @@ function ChartCard({
                   label={{ value: referenceLabel(selectedAlert, isMobile), position: "top", fill: selectedAlert?.color ?? "#00f5d4", fontSize: isMobile ? 10 : 11 }}
                 />
               ) : null}
-              {orderedSeriesMeta.map((series, idx) => {
+              {seriesMeta.map((series) => {
                 const isHoveredMiner = activeSeriesKey === series.key;
+                const isPinnedMiner = pinnedSeriesKey === series.key;
                 const isSelectedMiner = selectedMinerKey === series.key;
-                const hasActiveMiner = activeSeriesKey !== null || selectedMinerKey !== null;
-                const isProminent = isHoveredMiner || (!activeSeriesKey && isSelectedMiner);
+                const hasActiveMiner = highlightedSeriesKey !== null;
+                const isProminent = isHoveredMiner || (!activeSeriesKey && isPinnedMiner) || (!activeSeriesKey && !pinnedSeriesKey && isSelectedMiner);
                 return (
                   <Line
                     key={series.key}
@@ -634,16 +649,16 @@ function ChartCard({
                     activeDot={
                       <ActiveMinerDot
                         dataKey={series.key}
-                        activeSeriesKey={activeSeriesKey}
+                        highlightedSeriesKey={highlightedSeriesKey}
                         setActiveSeriesKey={setActiveSeriesKey}
+                        togglePinnedSeriesKey={handleTogglePinnedSeriesKey}
                       />
                     }
                     connectNulls={false}
                     onMouseEnter={() => setActiveSeriesKey(series.key)}
                     onMouseLeave={() => setActiveSeriesKey(null)}
-                    isAnimationActive={true}
-                    animationDuration={1200 + idx * 200}
-                    animationEasing="ease-out"
+                    onClick={() => handleTogglePinnedSeriesKey(series.key)}
+                    isAnimationActive={false}
                   />
                 );
               })}
