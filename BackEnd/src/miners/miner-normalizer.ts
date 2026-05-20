@@ -297,8 +297,8 @@ export function extractMinerIdentity(params: {
     macAddress: normalizeMacAddress(
       firstString(statusPayload, "mac", "mac_address", "macAddress", "macaddr", "network.mac", "network.mac_address") ??
         firstString(summaryMiner, "mac", "mac_address", "macAddress", "macaddr", "network.mac") ??
-        firstString(infoPayload, "mac", "mac_address", "macAddress", "macaddr", "network.mac", "network.mac_address") ??
-        firstString(infoSystem, "mac", "mac_address", "macAddress", "macaddr", "ethaddr", "network.mac") ??
+        firstString(infoPayload, "mac", "mac_address", "macAddress", "macaddr", "network.mac", "network.mac_address", "system.network_status.mac") ??
+        firstString(infoSystem, "mac", "mac_address", "macAddress", "macaddr", "ethaddr", "network.mac", "network_status.mac") ??
         firstString(cgminerStats, "MAC", "Mac", "mac", "macaddr")
     ),
   };

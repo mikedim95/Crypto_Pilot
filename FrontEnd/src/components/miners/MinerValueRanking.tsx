@@ -1,11 +1,11 @@
-import { Activity, Clock3, Flame, Gauge, Thermometer, Trophy, Wind, Zap } from "lucide-react";
+import { Activity, Clock3, Flame, Gauge, Percent, Thermometer, Trophy, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { MinerEntity, MinerLiveData } from "@/types/api";
 
-type RankingTrait = "value" | "hashrate" | "thermal" | "uptime" | "efficiency" | "fan";
+type RankingTrait = "value" | "thermalYield" | "hashrate" | "efficiency" | "rejectRate" | "thermal" | "uptime";
 
 interface MinerValueRankingProps {
   miners: MinerEntity[];
@@ -21,11 +21,14 @@ interface MinerRankingRow {
   thermalScore: number;
   uptimeScore: number;
   efficiencyScore: number;
-  fanScore: number;
+  thermalYieldScore: number;
+  rejectRateScore: number;
   hashrateThs: number | null;
   maxTemp: number | null;
   downtimeMinutes: number | null;
   efficiencyJth: number | null;
+  thermalYieldThPerC: number | null;
+  rejectRatePct: number | null;
   fanPwm: number | null;
   isOnline: boolean;
   identityKey: string;
@@ -39,12 +42,13 @@ const rankingTraits: Array<{
   icon: typeof Trophy;
   description: string;
 }> = [
-  { id: "value", label: "Value", icon: Trophy, description: "Balanced score from TH/s, thermals, uptime, efficiency, and fan load." },
+  { id: "value", label: "Value", icon: Trophy, description: "Balanced score from TH/C, W/TH, reject rate, uptime, and raw TH/s." },
+  { id: "thermalYield", label: "TH/C", icon: Thermometer, description: "Best current hashrate per hottest sensor degree first." },
   { id: "hashrate", label: "TH/s", icon: Activity, description: "Highest current hashrate first." },
-  { id: "thermal", label: "Temps", icon: Thermometer, description: "Cooler miners rank higher." },
+  { id: "efficiency", label: "W/TH", icon: Zap, description: "Lower watts per TH ranks higher." },
+  { id: "rejectRate", label: "Rejects", icon: Percent, description: "Lower accepted-pool reject rate ranks higher." },
+  { id: "thermal", label: "Temps", icon: Flame, description: "Cooler miners rank higher." },
   { id: "uptime", label: "Downtime", icon: Clock3, description: "Online miners and recent telemetry rank higher." },
-  { id: "efficiency", label: "Efficiency", icon: Zap, description: "Lower J/TH ranks higher when power data exists." },
-  { id: "fan", label: "Fan", icon: Wind, description: "Lower fan duty with healthy thermals ranks higher." },
 ];
 
 function clamp(value: number, min = 0, max = 100): number {
@@ -99,10 +103,13 @@ function scoreUptime(downtimeMinutes: number | null, isOnline: boolean): number 
   return 0;
 }
 
-function scoreFan(fanPwm: number | null, thermalScore: number): number {
-  if (fanPwm === null) return thermalScore >= 70 ? 62 : 40;
-  const fanLoadScore = fanPwm <= 55 ? 100 : clamp(100 - (fanPwm - 55) * 1.7);
-  return clamp(fanLoadScore * 0.65 + thermalScore * 0.35);
+function getRejectRate(live: MinerLiveData | undefined): number | null {
+  const activePool = live?.pools.find((pool, index) => live.poolActiveIndex === index) ?? live?.pools[0];
+  const accepted = activePool?.accepted;
+  const rejected = activePool?.rejected;
+  if (!validNumber(accepted) || !validNumber(rejected)) return null;
+  const total = accepted + rejected;
+  return total > 0 ? (rejected / total) * 100 : null;
 }
 
 function formatDowntime(minutes: number | null): string {
@@ -121,14 +128,16 @@ function formatTraitValue(row: MinerRankingRow, trait: RankingTrait): string {
   switch (trait) {
     case "hashrate":
       return row.hashrateThs !== null ? `${row.hashrateThs.toFixed(2)} TH/s` : "--";
+    case "thermalYield":
+      return row.thermalYieldThPerC !== null ? `${row.thermalYieldThPerC.toFixed(3)} TH/C` : "--";
     case "thermal":
       return row.maxTemp !== null ? `${row.maxTemp}C` : "--";
     case "uptime":
       return formatDowntime(row.downtimeMinutes);
     case "efficiency":
-      return row.efficiencyJth !== null ? `${row.efficiencyJth.toFixed(1)} J/TH` : "--";
-    case "fan":
-      return row.fanPwm !== null ? `${row.fanPwm}%` : "--";
+      return row.efficiencyJth !== null ? `${row.efficiencyJth.toFixed(1)} W/TH` : "--";
+    case "rejectRate":
+      return row.rejectRatePct !== null ? `${row.rejectRatePct.toFixed(2)}%` : "--";
     case "value":
       return formatScore(row.valueScore);
   }
@@ -138,14 +147,16 @@ function getTraitScore(row: MinerRankingRow, trait: RankingTrait): number {
   switch (trait) {
     case "hashrate":
       return row.hashrateScore;
+    case "thermalYield":
+      return row.thermalYieldScore;
     case "thermal":
       return row.thermalScore;
     case "uptime":
       return row.uptimeScore;
     case "efficiency":
       return row.efficiencyScore;
-    case "fan":
-      return row.fanScore;
+    case "rejectRate":
+      return row.rejectRateScore;
     case "value":
       return row.valueScore;
   }
@@ -163,6 +174,8 @@ function buildRows(miners: MinerEntity[], fleetLive: MinerLiveData[]): MinerRank
     const downtimeMinutes = getDowntimeMinutes(miner, live);
     const fanPwm = validNumber(live?.fanPwm) ? live.fanPwm : null;
     const macAddress = getMinerMac(miner, live);
+    const thermalYieldThPerC = hashrateThs !== null && maxTemp !== null && maxTemp > 0 ? hashrateThs / maxTemp : null;
+    const rejectRatePct = getRejectRate(live);
 
     return {
       miner,
@@ -173,18 +186,23 @@ function buildRows(miners: MinerEntity[], fleetLive: MinerLiveData[]): MinerRank
       maxTemp,
       downtimeMinutes,
       efficiencyJth,
+      thermalYieldThPerC,
+      rejectRatePct,
       fanPwm,
       isOnline,
     };
   });
 
   const maxHashrate = Math.max(...rawRows.map((row) => row.hashrateThs ?? 0), 0);
+  const maxThermalYield = Math.max(...rawRows.map((row) => row.thermalYieldThPerC ?? 0), 0);
   const knownEfficiencies = rawRows.map((row) => row.efficiencyJth).filter(validNumber);
   const minEfficiency = knownEfficiencies.length > 0 ? Math.min(...knownEfficiencies) : null;
   const maxEfficiency = knownEfficiencies.length > 0 ? Math.max(...knownEfficiencies) : null;
 
   return rawRows.map((row) => {
     const hashrateScore = maxHashrate > 0 && row.hashrateThs !== null ? clamp((row.hashrateThs / maxHashrate) * 100) : 0;
+    const thermalYieldScore =
+      maxThermalYield > 0 && row.thermalYieldThPerC !== null ? clamp((row.thermalYieldThPerC / maxThermalYield) * 100) : 0;
     const thermalScore = scoreThermals(row.maxTemp, row.isOnline);
     const uptimeScore = scoreUptime(row.downtimeMinutes, row.isOnline);
     const efficiencyScore =
@@ -193,12 +211,15 @@ function buildRows(miners: MinerEntity[], fleetLive: MinerLiveData[]): MinerRank
           ? 100
           : clamp(100 - ((row.efficiencyJth - minEfficiency) / (maxEfficiency - minEfficiency)) * 100)
         : 50;
-    const fanScore = scoreFan(row.fanPwm, thermalScore);
-    const valueScore = clamp(hashrateScore * 0.42 + thermalScore * 0.24 + uptimeScore * 0.22 + efficiencyScore * 0.08 + fanScore * 0.04);
+    const rejectRateScore = row.rejectRatePct !== null ? clamp(100 - row.rejectRatePct * 20) : 65;
+    const valueScore = clamp(
+      thermalYieldScore * 0.34 + efficiencyScore * 0.24 + rejectRateScore * 0.16 + uptimeScore * 0.16 + hashrateScore * 0.1
+    );
     const missing = [
       row.hashrateThs === null ? "rate" : null,
       row.maxTemp === null ? "temp" : null,
       row.efficiencyJth === null ? "power" : null,
+      row.rejectRatePct === null ? "shares" : null,
       row.downtimeMinutes === null ? "last seen" : null,
       row.identityLabel === "MAC pending" ? "MAC" : null,
     ].filter(Boolean) as string[];
@@ -210,7 +231,8 @@ function buildRows(miners: MinerEntity[], fleetLive: MinerLiveData[]): MinerRank
       thermalScore,
       uptimeScore,
       efficiencyScore,
-      fanScore,
+      thermalYieldScore,
+      rejectRateScore,
       missing,
     };
   });
@@ -303,7 +325,11 @@ export function MinerValueRanking({ miners, fleetLive, isLoading = false }: Mine
                       {row.miner.name} | {row.miner.model ?? "Unknown model"} | Current IP {row.miner.ip}
                     </div>
 
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                      <div className="font-mono text-xs text-muted-foreground">
+                        <Thermometer className="mr-1 inline h-3.5 w-3.5 text-primary" />
+                        {row.thermalYieldThPerC !== null ? `${row.thermalYieldThPerC.toFixed(3)} TH/C` : "--"}
+                      </div>
                       <div className="font-mono text-xs text-muted-foreground">
                         <Gauge className="mr-1 inline h-3.5 w-3.5 text-primary" />
                         {row.hashrateThs !== null ? `${row.hashrateThs.toFixed(2)} TH/s` : "--"}
@@ -318,11 +344,11 @@ export function MinerValueRanking({ miners, fleetLive, isLoading = false }: Mine
                       </div>
                       <div className="font-mono text-xs text-muted-foreground">
                         <Zap className="mr-1 inline h-3.5 w-3.5 text-positive" />
-                        {row.efficiencyJth !== null ? `${row.efficiencyJth.toFixed(1)} J/TH` : "--"}
+                        {row.efficiencyJth !== null ? `${row.efficiencyJth.toFixed(1)} W/TH` : "--"}
                       </div>
                       <div className="font-mono text-xs text-muted-foreground">
-                        <Wind className="mr-1 inline h-3.5 w-3.5 text-muted-foreground" />
-                        {row.fanPwm !== null ? `${row.fanPwm}% fan` : "--"}
+                        <Percent className="mr-1 inline h-3.5 w-3.5 text-muted-foreground" />
+                        {row.rejectRatePct !== null ? `${row.rejectRatePct.toFixed(2)}% reject` : "--"}
                       </div>
                     </div>
                   </div>
