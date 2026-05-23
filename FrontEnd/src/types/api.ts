@@ -253,6 +253,7 @@ export interface MinerPresetOption {
 export interface FleetOverview {
   totalMiners: number;
   onlineMiners: number;
+  miningMiners: number;
   enabledMiners: number;
   totalRateThs: number;
   totalPowerWatts: number;

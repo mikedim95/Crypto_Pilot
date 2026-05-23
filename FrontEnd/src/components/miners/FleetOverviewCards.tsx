@@ -13,11 +13,12 @@ function formatValue(value: number | null | undefined, suffix = ""): string {
 }
 
 export function FleetOverviewCards({ overview, isLoading = false }: FleetOverviewCardsProps) {
+  const miningMiners = overview?.miningMiners ?? overview?.onlineMiners;
   const cards = [
     {
-      label: "Miners Online",
-      value: overview ? `${overview.onlineMiners} / ${overview.totalMiners}` : "--",
-      sub: overview ? `${overview.enabledMiners} enabled` : "Awaiting backend data",
+      label: "Miners Mining",
+      value: overview && typeof miningMiners === "number" ? `${miningMiners} / ${overview.totalMiners}` : "--",
+      sub: overview ? `${overview.onlineMiners} online | ${overview.enabledMiners} enabled` : "Awaiting backend data",
       icon: Cpu,
       tone: "text-positive",
     },

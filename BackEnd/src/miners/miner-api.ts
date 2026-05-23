@@ -201,6 +201,10 @@ function isValidTemperature(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 150;
 }
 
+function isActivelyMining(miner: MinerLiveData): boolean {
+  return miner.online && typeof miner.totalRateThs === "number" && miner.totalRateThs > 0;
+}
+
 function asyncHandler(
   handler: (req: Request, res: Response, next: NextFunction) => Promise<void>
 ): express.Handler {
@@ -975,6 +979,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const fleet = fleetSnapshot.fleet;
 
       const onlineMiners = fleet.filter((miner) => miner.online).length;
+      const miningMiners = fleet.filter(isActivelyMining).length;
       const totalRateThs = fleet.reduce((sum, miner) => sum + (miner.totalRateThs ?? 0), 0);
       const totalPowerWatts = fleet.reduce((sum, miner) => sum + (miner.powerWatts ?? 0), 0);
       const hottestBoardTemp = fleet.flatMap((miner) => miner.boardTemps).reduce<number | null>((max, value) => {
@@ -992,6 +997,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
         overview: {
           totalMiners: miners.length,
           onlineMiners,
+          miningMiners,
           enabledMiners: miners.filter((miner) => miner.isEnabled).length,
           totalRateThs,
           totalPowerWatts,

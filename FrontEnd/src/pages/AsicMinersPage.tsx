@@ -36,6 +36,10 @@ function scopeForTimestamp(timestamp: string): FleetHistoryScope {
   return "month";
 }
 
+function isMiningMiner(miner: MinerLiveData): boolean {
+  return miner.online && typeof miner.totalRateThs === "number" && miner.totalRateThs > 0;
+}
+
 export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMinersPageProps) {
   const queryClient = useQueryClient();
   const [selectedMinerId, setSelectedMinerId] = useState<number | undefined>();
@@ -322,7 +326,7 @@ export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMin
               <Skeleton className="mt-2 h-5 w-32" />
             ) : (
               <div className="mt-1 text-sm font-mono text-foreground">
-                {miners.length} miners | {hasFleetTelemetry ? `${fleetLive.filter((miner) => miner.online).length} online` : "Live status pending"}
+                {miners.length} miners | {hasFleetTelemetry ? `${fleetLive.filter(isMiningMiner).length} mining` : "Live status pending"}
               </div>
             )}
           </div>

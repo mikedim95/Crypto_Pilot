@@ -168,6 +168,7 @@ export interface MinerThermalPresetReport {
 export interface MinerOverview {
   totalMiners: number;
   onlineMiners: number;
+  miningMiners: number;
   enabledMiners: number;
   totalRateThs: number;
   totalPowerWatts: number;

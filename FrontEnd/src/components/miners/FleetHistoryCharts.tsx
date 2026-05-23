@@ -94,7 +94,7 @@ function buildChartRows(history: FleetHistorySeries[], metric: ChartMetricKey) {
 }
 
 function buildFleetRateRows(history: FleetHistorySeries[]) {
-  const rows = new Map<string, { timestamp: string; totalRateThs: number; onlineMiners: number }>();
+  const rows = new Map<string, { timestamp: string; totalRateThs: number; miningMiners: number }>();
 
   for (const series of history) {
     for (const point of series.points) {
@@ -102,12 +102,10 @@ function buildFleetRateRows(history: FleetHistorySeries[]) {
       const parsedTime = new Date(timestamp).getTime();
       if (!Number.isFinite(parsedTime)) continue;
 
-      const row = rows.get(timestamp) ?? { timestamp, totalRateThs: 0, onlineMiners: 0 };
+      const row = rows.get(timestamp) ?? { timestamp, totalRateThs: 0, miningMiners: 0 };
       if (isChartMetricValue(point.totalRateThs, "totalRateThs")) {
         row.totalRateThs += point.totalRateThs;
-      }
-      if (point.online) {
-        row.onlineMiners += 1;
+        row.miningMiners += 1;
       }
       rows.set(timestamp, row);
     }
@@ -382,7 +380,7 @@ function FleetRateTooltip({
 }: {
   active?: boolean;
   label?: string | number;
-  payload?: Array<{ payload?: { totalRateThs?: number; onlineMiners?: number }; value?: number | string | null }>;
+  payload?: Array<{ payload?: { totalRateThs?: number; miningMiners?: number }; value?: number | string | null }>;
 }) {
   const item = payload?.find((entry) => typeof entry.value === "number");
   if (!active || !item || typeof item.value !== "number") return null;
@@ -395,7 +393,7 @@ function FleetRateTooltip({
         <span>{item.value.toFixed(2)} TH/s</span>
       </div>
       <div className="mt-2 text-muted-foreground">
-        Online miners: {typeof item.payload?.onlineMiners === "number" ? item.payload.onlineMiners : "--"}
+        Mining miners: {typeof item.payload?.miningMiners === "number" ? item.payload.miningMiners : "--"}
       </div>
     </div>
   );
@@ -440,7 +438,7 @@ function FleetRateChartCard({
         <div className="min-w-0">
           <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Overall Fleet Rate</div>
           <div className="mt-1 text-sm font-mono text-muted-foreground hidden md:block">
-            Total persisted fleet hashrate in TH/s across all online miners.
+            Total persisted fleet hashrate in TH/s across miners with positive hashrate.
           </div>
         </div>
         {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : <TrendingUp className="h-4 w-4 text-primary" />}
