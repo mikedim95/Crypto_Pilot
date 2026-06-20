@@ -94,6 +94,9 @@ const minerPollMs =
 const rawMinerPollConcurrency = Number(process.env.MINER_POLL_CONCURRENCY ?? 3);
 const minerPollConcurrency =
   Number.isFinite(rawMinerPollConcurrency) && rawMinerPollConcurrency >= 1 ? Math.floor(rawMinerPollConcurrency) : 3;
+const rawMinerInitRetryMs = Number(process.env.MINER_INIT_RETRY_MS ?? 5_000);
+const minerInitRetryMs =
+  Number.isFinite(rawMinerInitRetryMs) && rawMinerInitRetryMs >= 1_000 ? Math.round(rawMinerInitRetryMs) : 5_000;
 const asicOnlyMode = ["1", "true", "yes"].includes((process.env.ASIC_ONLY_MODE ?? "").trim().toLowerCase());
 
 const strategyRepository = new StrategyRepository(process.env.STRATEGY_STORE_PATH);
@@ -734,6 +737,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 let server: ReturnType<typeof app.listen> | null = null;
+let minerInitRetryTimer: NodeJS.Timeout | null = null;
+let shuttingDown = false;
 
 function stripMinerApiPath(apiBaseUrl: string): string {
   return apiBaseUrl.replace(/\/api(?:\/v\d+)?\/?$/i, "").replace(/\/+$/, "");
@@ -851,7 +856,38 @@ async function initializeOptionalSubsystem(
   }
 }
 
+async function initializeMinerSubsystem(): Promise<void> {
+  minerInitRetryTimer = null;
+
+  try {
+    await minerRepository.init();
+    if (!shuttingDown) {
+      minerPollingService.start();
+    }
+  } catch (error) {
+    logger.warn(
+      {
+        subsystem: "miner-repository",
+        retryInMs: minerInitRetryMs,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "Miner subsystem initialization failed. Retrying."
+    );
+
+    if (!shuttingDown && !minerInitRetryTimer) {
+      minerInitRetryTimer = setTimeout(() => {
+        void initializeMinerSubsystem();
+      }, minerInitRetryMs);
+    }
+  }
+}
+
 const shutdown = async (): Promise<void> => {
+  shuttingDown = true;
+  if (minerInitRetryTimer) {
+    clearTimeout(minerInitRetryTimer);
+    minerInitRetryTimer = null;
+  }
   strategyScheduler.stop();
   performanceTracker.stop();
   minerPollingService.stop();
@@ -908,9 +944,7 @@ async function bootstrap(): Promise<void> {
     });
   }
 
-  void initializeOptionalSubsystem("miner-repository", () => minerRepository.init(), () => {
-    minerPollingService.start();
-  });
+  void initializeMinerSubsystem();
 }
 
 bootstrap().catch((error) => {
