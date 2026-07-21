@@ -350,6 +350,11 @@ export const backendApi = {
       temperatureControlEnabled?: boolean;
       temperatureControlMin?: number | null;
       temperatureControlMax?: number | null;
+      scheduleEnabled?: boolean;
+      scheduleStartTime?: string | null;
+      scheduleStopTime?: string | null;
+      scheduleTimezone?: string;
+      scheduleDays?: number[];
     }
   ) =>
     apiRequest<MinerResponse>(`/api/miners/${minerId}`, {

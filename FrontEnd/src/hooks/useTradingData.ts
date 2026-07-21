@@ -344,6 +344,17 @@ export function useMinerDetails(minerId: number | undefined) {
   });
 }
 
+export function useMinerPresets(minerId: number | undefined) {
+  return useQuery({
+    queryKey: ["miner-presets", minerId],
+    queryFn: () => backendApi.getMinerPresets(minerId ?? 0),
+    enabled: typeof minerId === "number" && minerId > 0,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 0,
+  });
+}
+
 export function useMinerHistory(minerId: number | undefined, limit = 120) {
   return useQuery({
     queryKey: ["miner-history", minerId, limit],

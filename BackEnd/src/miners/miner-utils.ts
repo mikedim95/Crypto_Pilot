@@ -37,6 +37,15 @@ export function toBoolean(value: boolean | number): boolean {
   return value === true || value === 1;
 }
 
+function parseJsonValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 export function parseCapabilities(value: unknown): MinerCapabilities | null {
   if (!value) return null;
 
@@ -63,6 +72,11 @@ export function parseCapabilities(value: unknown): MinerCapabilities | null {
 }
 
 export function mapMinerRecord(record: MinerRecord): MinerEntity {
+  const rawScheduleDays = parseJsonValue(record.schedule_days_json);
+  const scheduleDays = Array.isArray(rawScheduleDays)
+    ? rawScheduleDays.filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6)
+    : [0, 1, 2, 3, 4, 5, 6];
+
   return {
     id: record.id,
     name: record.name,
@@ -77,6 +91,13 @@ export function mapMinerRecord(record: MinerRecord): MinerEntity {
     temperatureControlMin: record.temp_control_min,
     temperatureControlMax: record.temp_control_max,
     temperatureControlLastAdjustedAt: record.temp_control_last_adjusted_at,
+    scheduleEnabled: toBoolean(record.schedule_enabled),
+    scheduleStartTime: record.schedule_start_time,
+    scheduleStopTime: record.schedule_stop_time,
+    scheduleTimezone: record.schedule_timezone?.trim() || "Europe/Athens",
+    scheduleDays,
+    scheduleLastAction: record.schedule_last_action,
+    scheduleLastActionAt: record.schedule_last_action_at,
     isEnabled: toBoolean(record.is_enabled),
     verificationStatus: record.verification_status,
     lastSeenAt: record.last_seen_at,

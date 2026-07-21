@@ -190,12 +190,19 @@ export class MinerRepository {
             temp_control_min,
             temp_control_max,
             temp_control_last_adjusted_at,
+            schedule_enabled,
+            schedule_start_time,
+            schedule_stop_time,
+            schedule_timezone,
+            schedule_days_json,
+            schedule_last_action,
+            schedule_last_action_at,
             is_enabled,
             verification_status,
             last_seen_at,
             last_error,
             capabilities_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           input.name,
@@ -210,6 +217,13 @@ export class MinerRepository {
           input.temperatureControlMin ?? null,
           input.temperatureControlMax ?? null,
           toMysqlDateTime(input.temperatureControlLastAdjustedAt),
+          input.scheduleEnabled ?? false,
+          input.scheduleStartTime ?? null,
+          input.scheduleStopTime ?? null,
+          input.scheduleTimezone ?? "Europe/Athens",
+          JSON.stringify(input.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]),
+          input.scheduleLastAction ?? null,
+          toMysqlDateTime(input.scheduleLastActionAt),
           input.isEnabled ?? true,
           input.verificationStatus,
           toMysqlDateTime(input.lastSeenAt),
@@ -250,6 +264,15 @@ export class MinerRepository {
       if ("temperatureControlMax" in patch) push("temp_control_max", patch.temperatureControlMax ?? null);
       if ("temperatureControlLastAdjustedAt" in patch) {
         push("temp_control_last_adjusted_at", toMysqlDateTime(patch.temperatureControlLastAdjustedAt));
+      }
+      if (typeof patch.scheduleEnabled === "boolean") push("schedule_enabled", patch.scheduleEnabled);
+      if ("scheduleStartTime" in patch) push("schedule_start_time", patch.scheduleStartTime ?? null);
+      if ("scheduleStopTime" in patch) push("schedule_stop_time", patch.scheduleStopTime ?? null);
+      if (typeof patch.scheduleTimezone === "string") push("schedule_timezone", patch.scheduleTimezone);
+      if (Array.isArray(patch.scheduleDays)) push("schedule_days_json", JSON.stringify(patch.scheduleDays));
+      if ("scheduleLastAction" in patch) push("schedule_last_action", patch.scheduleLastAction ?? null);
+      if ("scheduleLastActionAt" in patch) {
+        push("schedule_last_action_at", toMysqlDateTime(patch.scheduleLastActionAt));
       }
       if (typeof patch.isEnabled === "boolean") push("is_enabled", patch.isEnabled);
       if (typeof patch.verificationStatus === "string") push("verification_status", patch.verificationStatus);

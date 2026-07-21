@@ -13,6 +13,7 @@ interface MinerDetailPanelProps {
   isCommandPending: boolean;
   isPresetPending: boolean;
   isThermalSettingsPending: boolean;
+  isMinerSettingsPending: boolean;
   onClose: () => void;
   onCommand: (action: "restart" | "reboot" | "start" | "stop" | "pause" | "resume") => void;
   onOpenLivePage: (minerId: number) => void;
@@ -23,7 +24,28 @@ interface MinerDetailPanelProps {
     temperatureControlMin: number | null;
     temperatureControlMax: number | null;
   }) => void;
+  onSaveMinerSettings: (settings: {
+    name: string;
+    ip: string;
+    password?: string;
+    isEnabled: boolean;
+    scheduleEnabled: boolean;
+    scheduleStartTime: string;
+    scheduleStopTime: string;
+    scheduleTimezone: string;
+    scheduleDays: number[];
+  }) => void;
 }
+
+const SCHEDULE_DAYS = [
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+  { value: 0, label: "Sun" },
+];
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
@@ -54,18 +76,29 @@ export function MinerDetailPanel({
   isCommandPending,
   isPresetPending,
   isThermalSettingsPending,
+  isMinerSettingsPending,
   onClose,
   onCommand,
   onOpenLivePage,
   onSwitchPool,
   onApplyPreset,
   onSaveThermalSettings,
+  onSaveMinerSettings,
 }: MinerDetailPanelProps) {
   const { miner, liveData, presets, commands } = details;
   const [selectedPreset, setSelectedPreset] = useState<string>("");
   const [temperatureControlEnabled, setTemperatureControlEnabled] = useState(false);
   const [temperatureControlMin, setTemperatureControlMin] = useState("");
   const [temperatureControlMax, setTemperatureControlMax] = useState("");
+  const [name, setName] = useState("");
+  const [ip, setIp] = useState("");
+  const [password, setPassword] = useState("");
+  const [isEnabled, setIsEnabled] = useState(true);
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleStartTime, setScheduleStartTime] = useState("08:00");
+  const [scheduleStopTime, setScheduleStopTime] = useState("22:00");
+  const [scheduleTimezone, setScheduleTimezone] = useState("Europe/Athens");
+  const [scheduleDays, setScheduleDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
 
   useEffect(() => {
     setSelectedPreset(liveData.presetName ?? presets[0]?.name ?? "");
@@ -80,6 +113,18 @@ export function MinerDetailPanel({
       typeof miner.temperatureControlMax === "number" ? String(miner.temperatureControlMax) : "",
     );
   }, [miner.temperatureControlEnabled, miner.temperatureControlMax, miner.temperatureControlMin]);
+
+  useEffect(() => {
+    setName(miner.name);
+    setIp(miner.ip);
+    setPassword("");
+    setIsEnabled(miner.isEnabled);
+    setScheduleEnabled(miner.scheduleEnabled);
+    setScheduleStartTime(miner.scheduleStartTime ?? "08:00");
+    setScheduleStopTime(miner.scheduleStopTime ?? "22:00");
+    setScheduleTimezone(miner.scheduleTimezone || "Europe/Athens");
+    setScheduleDays(miner.scheduleDays.length > 0 ? miner.scheduleDays : [0, 1, 2, 3, 4, 5, 6]);
+  }, [miner]);
 
   const canApplyPreset = selectedPreset.length > 0 && selectedPreset !== (liveData.presetName ?? "") && !isPresetPending;
   const parsedTemperatureControlMin = parseTemperatureInput(temperatureControlMin);
@@ -102,6 +147,27 @@ export function MinerDetailPanel({
     (parsedTemperatureControlMax ?? null) !== miner.temperatureControlMax;
   const canSaveThermalSettings =
     thermalSettingsChanged && !thermalInputsInvalid && !thermalBoundsInvalid && !isThermalSettingsPending;
+  const scheduleInvalid =
+    scheduleEnabled &&
+    (!scheduleStartTime || !scheduleStopTime || scheduleStartTime === scheduleStopTime || !scheduleTimezone.trim() || scheduleDays.length === 0);
+  const minerSettingsChanged =
+    name.trim() !== miner.name ||
+    ip.trim() !== miner.ip ||
+    password.length > 0 ||
+    isEnabled !== miner.isEnabled ||
+    scheduleEnabled !== miner.scheduleEnabled ||
+    scheduleStartTime !== (miner.scheduleStartTime ?? "08:00") ||
+    scheduleStopTime !== (miner.scheduleStopTime ?? "22:00") ||
+    scheduleTimezone.trim() !== miner.scheduleTimezone ||
+    scheduleDays.join(",") !== [...miner.scheduleDays].sort().join(",");
+  const canSaveMinerSettings =
+    minerSettingsChanged && Boolean(name.trim()) && Boolean(ip.trim()) && !scheduleInvalid && !isMinerSettingsPending;
+
+  const toggleScheduleDay = (day: number) => {
+    setScheduleDays((current) =>
+      current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort(),
+    );
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-background/70 backdrop-blur-sm animate-overlay-fade" onClick={onClose}>
@@ -143,6 +209,112 @@ export function MinerDetailPanel({
               <Metric label="Fan Duty" value={typeof liveData.fanPwm === "number" ? `${liveData.fanPwm}%` : "--"} />
               <Metric label="Power" value={typeof liveData.powerWatts === "number" ? `${liveData.powerWatts} W` : "--"} />
               <Metric label="Last Seen" value={liveData.lastSeenAt ? new Date(liveData.lastSeenAt).toLocaleString() : "--"} />
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="text-sm font-mono uppercase tracking-wider text-muted-foreground">Machine Settings</div>
+            <div className="rounded-md border border-border bg-secondary/20 p-4 space-y-5">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Name</span>
+                  <Input value={name} disabled={isMinerSettingsPending} onChange={(event) => setName(event.target.value)} />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">IP address</span>
+                  <Input value={ip} disabled={isMinerSettingsPending} onChange={(event) => setIp(event.target.value)} />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">New password</span>
+                  <Input
+                    type="password"
+                    value={password}
+                    placeholder="Leave blank to keep current password"
+                    disabled={isMinerSettingsPending}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </label>
+                <div className="flex items-end justify-between rounded-md border border-border bg-background px-3 py-2">
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Fleet polling</div>
+                    <div className="mt-1 font-mono text-sm text-foreground">{isEnabled ? "Enabled" : "Disabled"}</div>
+                  </div>
+                  <Switch checked={isEnabled} disabled={isMinerSettingsPending} onCheckedChange={setIsEnabled} />
+                </div>
+              </div>
+
+              <div className="border-t border-border pt-4 space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Operating Schedule</div>
+                    <div className="mt-1 font-mono text-xs text-muted-foreground">
+                      The miner starts at the start time and pauses at the stop time on the selected days.
+                    </div>
+                  </div>
+                  <Switch checked={scheduleEnabled} disabled={isMinerSettingsPending} onCheckedChange={setScheduleEnabled} />
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="space-y-2">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Start</span>
+                    <Input type="time" value={scheduleStartTime} disabled={isMinerSettingsPending} onChange={(event) => setScheduleStartTime(event.target.value)} />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Stop</span>
+                    <Input type="time" value={scheduleStopTime} disabled={isMinerSettingsPending} onChange={(event) => setScheduleStopTime(event.target.value)} />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Timezone</span>
+                    <Input value={scheduleTimezone} disabled={isMinerSettingsPending} onChange={(event) => setScheduleTimezone(event.target.value)} />
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {SCHEDULE_DAYS.map((day) => {
+                    const selected = scheduleDays.includes(day.value);
+                    return (
+                      <Button
+                        key={day.value}
+                        type="button"
+                        size="sm"
+                        variant={selected ? "default" : "outline"}
+                        disabled={isMinerSettingsPending}
+                        onClick={() => toggleScheduleDay(day.value)}
+                      >
+                        {day.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+                {scheduleInvalid ? (
+                  <div className="font-mono text-xs text-negative">Choose at least one day and different start/stop times.</div>
+                ) : null}
+                {miner.scheduleLastActionAt ? (
+                  <div className="font-mono text-xs text-muted-foreground">
+                    Last scheduled action: {miner.scheduleLastAction ?? "--"} at {new Date(miner.scheduleLastActionAt).toLocaleString()}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex justify-end">
+                <Button
+                  disabled={!canSaveMinerSettings}
+                  onClick={() =>
+                    onSaveMinerSettings({
+                      name: name.trim(),
+                      ip: ip.trim(),
+                      ...(password ? { password } : {}),
+                      isEnabled,
+                      scheduleEnabled,
+                      scheduleStartTime,
+                      scheduleStopTime,
+                      scheduleTimezone: scheduleTimezone.trim(),
+                      scheduleDays,
+                    })
+                  }
+                >
+                  {isMinerSettingsPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Save Machine Settings
+                </Button>
+              </div>
             </div>
           </section>
 

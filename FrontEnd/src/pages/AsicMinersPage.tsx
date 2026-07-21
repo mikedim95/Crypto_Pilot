@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, RefreshCcw } from "lucide-react";
 import { backendApi } from "@/lib/api";
-import { useFleetHistory, useFleetLive, useFleetOverview, useMinerDetails, useMinerHistory, useMiners } from "@/hooks/useTradingData";
+import { useFleetHistory, useFleetLive, useFleetOverview, useMinerDetails, useMinerHistory, useMinerPresets, useMiners } from "@/hooks/useTradingData";
 import { BulkActionToolbar } from "@/components/miners/BulkActionToolbar";
 import { FleetOverviewCards } from "@/components/miners/FleetOverviewCards";
 import { FleetHistoryCharts } from "@/components/miners/FleetHistoryCharts";
@@ -52,6 +52,7 @@ export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMin
   const { data: fleetData, isPending: loadingFleet, error: fleetError } = useFleetLive();
   const { data: minersData, isPending: loadingMiners, error: minersError } = useMiners();
   const { data: selectedMinerDetails } = useMinerDetails(selectedMinerId);
+  const { data: selectedMinerPresets } = useMinerPresets(selectedMinerId);
   const { data: selectedMinerHistory } = useMinerHistory(selectedMinerId, 120);
 
   const invalidateMinerQueries = async () => {
@@ -61,6 +62,7 @@ export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMin
       queryClient.invalidateQueries({ queryKey: ["fleet-live"] }),
       queryClient.invalidateQueries({ queryKey: ["miners-list"] }),
       queryClient.invalidateQueries({ queryKey: ["miner-details"] }),
+      queryClient.invalidateQueries({ queryKey: ["miner-presets"] }),
       queryClient.invalidateQueries({ queryKey: ["miner-history"] }),
     ]);
   };
@@ -214,6 +216,31 @@ export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMin
     },
   });
 
+  const minerSettingsMutation = useMutation({
+    mutationFn: (input: {
+      minerId: number;
+      name: string;
+      ip: string;
+      password?: string;
+      isEnabled: boolean;
+      scheduleEnabled: boolean;
+      scheduleStartTime: string;
+      scheduleStopTime: string;
+      scheduleTimezone: string;
+      scheduleDays: number[];
+    }) => {
+      const { minerId, ...settings } = input;
+      return backendApi.updateMiner(minerId, settings);
+    },
+    onSuccess: async () => {
+      toast.success("Machine settings saved.");
+      await invalidateMinerQueries();
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to save machine settings.");
+    },
+  });
+
   const miners = minersData?.miners ?? EMPTY_MINERS;
   const fleetLive = fleetData?.miners ?? EMPTY_FLEET_LIVE;
   const overview = overviewData?.overview;
@@ -358,11 +385,12 @@ export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMin
 
       {selectedMinerDetails ? (
         <MinerDetailPanel
-          details={selectedMinerDetails}
+          details={{ ...selectedMinerDetails, presets: selectedMinerPresets?.data ?? selectedMinerDetails.presets }}
           history={selectedMinerHistory?.history ?? []}
           isCommandPending={commandMutation.isPending || switchPoolMutation.isPending}
           isPresetPending={presetMutation.isPending}
           isThermalSettingsPending={thermalSettingsMutation.isPending}
+          isMinerSettingsPending={minerSettingsMutation.isPending}
           onClose={() => setSelectedMinerId(undefined)}
           onCommand={(action) => commandMutation.mutate({ minerId: selectedMinerDetails.miner.id, action })}
           onOpenLivePage={(minerId) => {
@@ -377,7 +405,24 @@ export function AsicMinersPage({ selectedAlert = null, onOpenMinerWeb }: AsicMin
               ...settings,
             })
           }
+          onSaveMinerSettings={(settings) =>
+            minerSettingsMutation.mutate({
+              minerId: selectedMinerDetails.miner.id,
+              ...settings,
+            })
+          }
         />
+      ) : null}
+
+      {selectedMinerId && !selectedMinerDetails ? (
+        <div className="fixed inset-0 z-50 flex justify-end bg-background/70 backdrop-blur-sm" onClick={() => setSelectedMinerId(undefined)}>
+          <div className="flex h-full w-full max-w-4xl items-center justify-center border-l border-border bg-card" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center gap-3 font-mono text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Loading machine details...
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <MinerValueRanking miners={miners} fleetLive={fleetLive} isLoading={isTableLoading || isFleetRefreshing} />

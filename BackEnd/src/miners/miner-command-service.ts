@@ -210,11 +210,11 @@ export class MinerCommandService {
   }
 
   pauseMining(minerId: number, createdBy?: string | null) {
-    return this.runCommand(minerId, "pause", "/mining/pause", undefined, createdBy);
+    return this.runCommand(minerId, "pause", "/mining/stop", undefined, createdBy);
   }
 
   resumeMining(minerId: number, createdBy?: string | null) {
-    return this.runCommand(minerId, "resume", "/mining/resume", undefined, createdBy);
+    return this.runCommand(minerId, "resume", "/mining/start", undefined, createdBy);
   }
 
   async startMining(minerId: number, createdBy?: string | null) {

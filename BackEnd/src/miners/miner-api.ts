@@ -8,6 +8,7 @@ import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
 import { MinerVerifyService } from "./miner-verify-service.js";
 import { buildApiBaseUrl } from "./miner-utils.js";
+import { isValidTimeZone } from "./miner-schedule.js";
 import type { FleetHistorySeries, MinerEntity, MinerLiveData } from "./types.js";
 
 const idParamSchema = z.object({
@@ -28,6 +29,11 @@ const updateMinerSchema = z.object({
   temperatureControlEnabled: z.boolean().optional(),
   temperatureControlMin: z.number().int().min(1).max(150).nullable().optional(),
   temperatureControlMax: z.number().int().min(1).max(150).nullable().optional(),
+  scheduleEnabled: z.boolean().optional(),
+  scheduleStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  scheduleStopTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  scheduleTimezone: z.string().trim().min(1).max(64).refine(isValidTimeZone, "Invalid IANA timezone.").optional(),
+  scheduleDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
 });
 
 const switchPoolSchema = z.object({
@@ -634,15 +640,11 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const snapshot = await deps.repository.getLatestSnapshot(miner.id);
       const pools = await deps.repository.listPools(miner.id);
       const commands = await deps.repository.listCommands(miner.id);
-      const presets = normalizePresetOptions(
-        await deps.readService.readPayload<unknown[]>(miner, "/autotune/presets", { authenticated: true }).catch(() => [])
-      );
-
       res.json({
         miner,
         liveData: buildMinerLiveDataFromSnapshot(miner, snapshot, pools),
         pools,
-        presets,
+        presets: [],
         commands,
       });
     })
@@ -666,6 +668,10 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
         body.temperatureControlMin !== undefined ? body.temperatureControlMin : miner.temperatureControlMin;
       const nextTemperatureControlMax =
         body.temperatureControlMax !== undefined ? body.temperatureControlMax : miner.temperatureControlMax;
+      const nextScheduleEnabled = body.scheduleEnabled ?? miner.scheduleEnabled;
+      const nextScheduleStartTime =
+        body.scheduleStartTime !== undefined ? body.scheduleStartTime : miner.scheduleStartTime;
+      const nextScheduleStopTime = body.scheduleStopTime !== undefined ? body.scheduleStopTime : miner.scheduleStopTime;
 
       if (
         nextTemperatureControlMin !== null &&
@@ -688,6 +694,22 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
         return;
       }
 
+      if (nextScheduleEnabled && (!nextScheduleStartTime || !nextScheduleStopTime)) {
+        res.status(400).json({ message: "A miner schedule requires both a start time and a stop time." });
+        return;
+      }
+      if (nextScheduleEnabled && nextScheduleStartTime === nextScheduleStopTime) {
+        res.status(400).json({ message: "Miner schedule start and stop times must be different." });
+        return;
+      }
+
+      const scheduleChanged =
+        body.scheduleEnabled !== undefined ||
+        body.scheduleStartTime !== undefined ||
+        body.scheduleStopTime !== undefined ||
+        body.scheduleTimezone !== undefined ||
+        body.scheduleDays !== undefined;
+
       const updated = await deps.repository.updateMiner(miner.id, {
         name: body.name,
         ip: body.ip,
@@ -697,6 +719,13 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
         temperatureControlEnabled: body.temperatureControlEnabled,
         temperatureControlMin: body.temperatureControlMin,
         temperatureControlMax: body.temperatureControlMax,
+        scheduleEnabled: body.scheduleEnabled,
+        scheduleStartTime: body.scheduleStartTime,
+        scheduleStopTime: body.scheduleStopTime,
+        scheduleTimezone: body.scheduleTimezone,
+        scheduleDays: body.scheduleDays ? [...new Set(body.scheduleDays)].sort() : undefined,
+        scheduleLastAction: scheduleChanged ? null : undefined,
+        scheduleLastActionAt: scheduleChanged ? null : undefined,
         verificationStatus: body.ip || body.password ? "pending" : undefined,
       });
 

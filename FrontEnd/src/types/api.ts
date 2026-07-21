@@ -101,6 +101,13 @@ export interface MinerEntity {
   temperatureControlMin: number | null;
   temperatureControlMax: number | null;
   temperatureControlLastAdjustedAt: string | null;
+  scheduleEnabled: boolean;
+  scheduleStartTime: string | null;
+  scheduleStopTime: string | null;
+  scheduleTimezone: string;
+  scheduleDays: number[];
+  scheduleLastAction: "start" | "stop" | null;
+  scheduleLastActionAt: string | null;
   isEnabled: boolean;
   verificationStatus: "pending" | "verified" | "failed";
   lastSeenAt: string | null;

@@ -4,6 +4,7 @@ import { MinerIngestPublisher, type MinerIngestSnapshot } from "./miner-ingest-p
 import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
 import type { MinerEntity, MinerPresetOption, MinerReadResult } from "./types.js";
+import { shouldMinerBeRunning } from "./miner-schedule.js";
 
 const TEMP_CONTROL_COOLDOWN_MS = (() => {
   const parsed = Number(process.env.MINER_TEMP_CONTROL_COOLDOWN_MS ?? 120_000);
@@ -52,6 +53,8 @@ const SNAPSHOT_PRUNE_MAX_BATCHES = (() => {
   }
   return Math.min(parsed, 500);
 })();
+
+const SCHEDULE_COMMAND_COOLDOWN_MS = 5 * 60 * 1000;
 
 export interface MinerPollResult {
   started: boolean;
@@ -285,6 +288,37 @@ export class MinerPollingService {
     });
   }
 
+  private async applySchedule(miner: MinerEntity, readResult: MinerReadResult): Promise<boolean> {
+    const shouldRun = shouldMinerBeRunning(miner);
+    if (shouldRun === null || !readResult.liveData.online) return false;
+
+    const state = readResult.liveData.minerState?.trim().toLowerCase() ?? "";
+    const isRunning = state === "mining" || state === "starting" || (readResult.liveData.totalRateThs ?? 0) > 0;
+    if (shouldRun === isRunning) return false;
+
+    const action = shouldRun ? "start" : "stop";
+    const lastActionAt = miner.scheduleLastActionAt ? new Date(miner.scheduleLastActionAt).getTime() : 0;
+    if (
+      miner.scheduleLastAction === action &&
+      Number.isFinite(lastActionAt) &&
+      Date.now() - lastActionAt < SCHEDULE_COMMAND_COOLDOWN_MS
+    ) {
+      return false;
+    }
+
+    if (shouldRun) {
+      await this.commandService.resumeMining(miner.id, "schedule");
+    } else {
+      await this.commandService.pauseMining(miner.id, "schedule");
+    }
+    await this.repository.updateMiner(miner.id, {
+      scheduleLastAction: action,
+      scheduleLastActionAt: new Date().toISOString(),
+      lastError: null,
+    });
+    return true;
+  }
+
   private startOldSnapshotPruneIfDue(): void {
     const now = Date.now();
     if (
@@ -412,7 +446,14 @@ export class MinerPollingService {
                 macAddress: readResult.liveData.macAddress ?? miner.macAddress,
               });
 
-              await this.applyTemperatureControl(miner, readResult).catch(async (error) => {
+              const scheduleChangedState = await this.applySchedule(miner, readResult).catch(async (error) => {
+                const message = error instanceof Error ? error.message : "Automatic miner schedule failed.";
+                await this.repository.updateMiner(miner.id, { lastError: message });
+                console.error(`[miner-schedule] Miner ${miner.id} (${miner.name}) failed: ${message}`);
+                return false;
+              });
+
+              if (!scheduleChangedState) await this.applyTemperatureControl(miner, readResult).catch(async (error) => {
                 const message = error instanceof Error ? error.message : "Automatic thermal preset control failed.";
                 await this.repository.updateMiner(miner.id, {
                   lastError: message,

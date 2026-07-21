@@ -28,6 +28,13 @@ export interface MinerRecord extends RowDataPacket {
   temp_control_min: number | null;
   temp_control_max: number | null;
   temp_control_last_adjusted_at: string | null;
+  schedule_enabled: number | boolean;
+  schedule_start_time: string | null;
+  schedule_stop_time: string | null;
+  schedule_timezone: string | null;
+  schedule_days_json: unknown;
+  schedule_last_action: "start" | "stop" | null;
+  schedule_last_action_at: string | null;
   is_enabled: number | boolean;
   verification_status: MinerVerificationStatus;
   last_seen_at: string | null;
@@ -51,6 +58,13 @@ export interface MinerEntity {
   temperatureControlMin: number | null;
   temperatureControlMax: number | null;
   temperatureControlLastAdjustedAt: string | null;
+  scheduleEnabled: boolean;
+  scheduleStartTime: string | null;
+  scheduleStopTime: string | null;
+  scheduleTimezone: string;
+  scheduleDays: number[];
+  scheduleLastAction: "start" | "stop" | null;
+  scheduleLastActionAt: string | null;
   isEnabled: boolean;
   verificationStatus: MinerVerificationStatus;
   lastSeenAt: string | null;
@@ -296,6 +310,13 @@ export interface MinerUpdateInput {
   temperatureControlMin?: number | null;
   temperatureControlMax?: number | null;
   temperatureControlLastAdjustedAt?: string | null;
+  scheduleEnabled?: boolean;
+  scheduleStartTime?: string | null;
+  scheduleStopTime?: string | null;
+  scheduleTimezone?: string;
+  scheduleDays?: number[];
+  scheduleLastAction?: "start" | "stop" | null;
+  scheduleLastActionAt?: string | null;
 }
 
 export interface MinerVerifyDraftInput {
@@ -317,6 +338,13 @@ export interface MinerPersistInput {
   temperatureControlMin?: number | null;
   temperatureControlMax?: number | null;
   temperatureControlLastAdjustedAt?: string | null;
+  scheduleEnabled?: boolean;
+  scheduleStartTime?: string | null;
+  scheduleStopTime?: string | null;
+  scheduleTimezone?: string;
+  scheduleDays?: number[];
+  scheduleLastAction?: "start" | "stop" | null;
+  scheduleLastActionAt?: string | null;
   verificationStatus: MinerVerificationStatus;
   capabilities?: MinerCapabilities | null;
   lastSeenAt?: string | null;

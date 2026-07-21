@@ -329,14 +329,35 @@ async function checkDatabaseReady(): Promise<{ db: "ok" | "fail"; error?: string
   }
 }
 
+async function withHealthDeadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms.`)), timeoutMs);
+  });
+  return Promise.race([promise, deadline]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function getReadinessSnapshot() {
-  const [dbStatus, storage] = await Promise.all([checkDatabaseReady(), strategyRepository.getStorageStatus()]);
+  const [dbStatus, storage] = await Promise.all([
+    withHealthDeadline(checkDatabaseReady(), 2_000, "Database readiness").catch((error) => ({
+      db: "fail" as const,
+      error: error instanceof Error ? error.message : "Database readiness failed.",
+    })),
+    withHealthDeadline(strategyRepository.getStorageStatus(), 2_000, "Strategy storage readiness").catch((error) => ({
+      storageMode: "offline" as const,
+      databaseAvailable: false,
+      message: error instanceof Error ? error.message : "Strategy storage readiness failed.",
+    })),
+  ]);
   const status = dbStatus.db === "ok" && storage.databaseAvailable ? "ok" : "fail";
 
   return {
     status,
     db: dbStatus.db,
     storageMode: storage.storageMode,
+    storage,
     version: appVersion,
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor((Date.now() - appStartedAt.getTime()) / 1000),
@@ -380,13 +401,12 @@ app.get("/health", (_req, res) => {
 
 app.get("/api/health", async (_req, res) => {
   const readiness = await getReadinessSnapshot();
-  const storage = await strategyRepository.getStorageStatus();
   res.json({
     status: readiness.status === "ok" ? "ok" : "degraded",
     db: readiness.db,
     version: readiness.version,
     timestamp: readiness.timestamp,
-    storage,
+    storage: readiness.storage,
   });
 });
 
