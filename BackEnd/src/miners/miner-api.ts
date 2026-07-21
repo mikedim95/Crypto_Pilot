@@ -2,7 +2,7 @@ import express, { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import { MinerCommandService } from "./miner-command-service.js";
 import { MinerCryptoService } from "./miner-crypto-service.js";
-import { buildMinerLiveDataFromSnapshot, liveDataToSnapshotRaw, normalizePoolsForStorage, normalizePresetOptions } from "./miner-normalizer.js";
+import { buildMinerLiveDataFromSnapshot, liveDataToSnapshotRaw, normalizePoolsForStorage, normalizeTunedPresetOptions } from "./miner-normalizer.js";
 import { MinerPollingService } from "./miner-polling-service.js";
 import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
@@ -925,7 +925,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const startedAt = Date.now();
       try {
         const presets = await deps.readService.readPayload<unknown[]>(miner, "/autotune/presets", { authenticated: true });
-        res.json(proxyEnvelope(miner.id, normalizePresetOptions(presets), Date.now() - startedAt));
+        res.json(proxyEnvelope(miner.id, normalizeTunedPresetOptions(presets), Date.now() - startedAt));
       } catch (error) {
         res.status(502).json({
           ok: false,

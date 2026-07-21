@@ -332,6 +332,14 @@ export function normalizePresetOptions(presets: unknown[] | null | undefined): M
     });
 }
 
+export function isTunedPreset(preset: MinerPresetOption): boolean {
+  return preset.status?.trim().toLowerCase() === "tuned";
+}
+
+export function normalizeTunedPresetOptions(presets: unknown[] | null | undefined): MinerPresetOption[] {
+  return normalizePresetOptions(presets).filter(isTunedPreset);
+}
+
 export function normalizePoolsFromCgminer(poolRows: unknown, storedPools: MinerPoolEntity[] = []): { pools: MinerPoolLive[]; activePoolIndex: number | null } {
   let activePoolIndex: number | null = null;
   const rows = listFromUnknown(poolRows);

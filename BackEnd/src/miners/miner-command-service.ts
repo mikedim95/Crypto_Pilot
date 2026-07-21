@@ -1,6 +1,6 @@
 import { MinerAuthService } from "./miner-auth-service.js";
 import { MinerHttpClient } from "./miner-http-client.js";
-import { buildMinerLiveDataFromSnapshot, liveDataToSnapshotRaw, normalizePoolsForStorage } from "./miner-normalizer.js";
+import { buildMinerLiveDataFromSnapshot, liveDataToSnapshotRaw, normalizePoolsForStorage, normalizeTunedPresetOptions } from "./miner-normalizer.js";
 import { MinerReadService } from "./miner-read-service.js";
 import { MinerRepository } from "./miner-repository.js";
 import { MinerEntity, MinerLiveData } from "./types.js";
@@ -277,7 +277,18 @@ export class MinerCommandService {
     return this.runCommand(minerId, "reboot", "/system/reboot", undefined, createdBy);
   }
 
-  setPreset(minerId: number, preset: string, createdBy?: string | null, audit?: unknown) {
+  async setPreset(minerId: number, preset: string, createdBy?: string | null, audit?: unknown) {
+    const miner = await this.getMinerOrThrow(minerId);
+    const availablePresets = normalizeTunedPresetOptions(
+      await this.readService.readPayload<unknown[]>(miner, "/autotune/presets", { authenticated: true })
+    );
+    const targetPreset = availablePresets.find(
+      (option) => option.name.trim().toLowerCase() === preset.trim().toLowerCase()
+    );
+    if (!targetPreset) {
+      throw new Error(`Preset ${preset} is not a tuned preset and cannot be applied.`);
+    }
+
     return this.runCommand(
       minerId,
       "set-preset",
@@ -285,7 +296,7 @@ export class MinerCommandService {
       {
         miner: {
           overclock: {
-            preset,
+            preset: targetPreset.name,
           },
         },
       },

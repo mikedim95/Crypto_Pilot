@@ -1,4 +1,4 @@
-import { liveDataToSnapshotRaw, normalizePoolsForStorage, normalizePresetOptions } from "./miner-normalizer.js";
+import { liveDataToSnapshotRaw, normalizePoolsForStorage, normalizeTunedPresetOptions } from "./miner-normalizer.js";
 import { MinerCommandService } from "./miner-command-service.js";
 import { MinerIngestPublisher, type MinerIngestSnapshot } from "./miner-ingest-publisher.js";
 import { MinerReadService } from "./miner-read-service.js";
@@ -235,7 +235,7 @@ export class MinerPollingService {
       return;
     }
 
-    const presets = sortPresetsForPowerScaling(normalizePresetOptions(readResult.presets ?? []));
+    const presets = sortPresetsForPowerScaling(normalizeTunedPresetOptions(readResult.presets ?? []));
 
     if (presets.length < 2) {
       return;

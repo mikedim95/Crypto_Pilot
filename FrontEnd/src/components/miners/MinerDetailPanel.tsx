@@ -101,7 +101,10 @@ export function MinerDetailPanel({
   const [scheduleDays, setScheduleDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
 
   useEffect(() => {
-    setSelectedPreset(liveData.presetName ?? presets[0]?.name ?? "");
+    const currentPresetAvailable = presets.some(
+      (preset) => preset.name.toLowerCase() === liveData.presetName?.toLowerCase(),
+    );
+    setSelectedPreset(currentPresetAvailable ? (liveData.presetName ?? "") : (presets[0]?.name ?? ""));
   }, [liveData.presetName, presets]);
 
   useEffect(() => {
