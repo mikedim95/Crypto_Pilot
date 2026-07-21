@@ -414,10 +414,15 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
     return sanitized;
   };
 
-  const loadMinersList = createTimedLoader<{ miners: MinerEntity[]; generatedAt: string }>(
+  const stripMinerCredential = (miner: MinerEntity): Omit<MinerEntity, "passwordEnc"> => {
+    const { passwordEnc: _passwordEnc, ...sanitized } = miner;
+    return sanitized;
+  };
+
+  const loadMinersList = createTimedLoader<{ miners: Array<Omit<MinerEntity, "passwordEnc">>; generatedAt: string }>(
     MINERS_LIST_CACHE_TTL_MS,
     async () => ({
-      miners: await deps.repository.listMiners(),
+      miners: (await deps.repository.listMiners()).map(stripMinerCredential),
       generatedAt: new Date().toISOString(),
     })
   );
@@ -610,7 +615,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const liveData = await persistLiveRead(miner.id).catch(() => null);
 
       res.status(201).json({
-        miner,
+        miner: stripMinerCredential(miner),
         verification: verification.result,
         liveData,
       });
@@ -641,7 +646,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const pools = await deps.repository.listPools(miner.id);
       const commands = await deps.repository.listCommands(miner.id);
       res.json({
-        miner,
+        miner: stripMinerCredential(miner),
         liveData: buildMinerLiveDataFromSnapshot(miner, snapshot, pools),
         pools,
         presets: [],
@@ -729,7 +734,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
         verificationStatus: body.ip || body.password ? "pending" : undefined,
       });
 
-      res.json({ miner: updated });
+      res.json({ miner: updated ? stripMinerCredential(updated) : null });
     })
   );
 
@@ -770,7 +775,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
       const miner = await deps.repository.setMinerEnabled(params.id, true);
-      res.json({ miner });
+      res.json({ miner: miner ? stripMinerCredential(miner) : null });
     })
   );
 
@@ -780,7 +785,7 @@ export function createMinerRouter(deps: MinerApiDeps): Router {
       const params = parseOrRespond(idParamSchema, req.params, res);
       if (!params) return;
       const miner = await deps.repository.setMinerEnabled(params.id, false);
-      res.json({ miner });
+      res.json({ miner: miner ? stripMinerCredential(miner) : null });
     })
   );
 
